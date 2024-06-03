@@ -1,7 +1,7 @@
 import numpy as np
 from lib.dataset import *
 
-train_dataset, test_dataset = load_and_split(is_test_split=True)
+train_dataset, test_dataset = load_and_split(use_full_data=True)
 
 train_file_path_x = "data/train_tf_bind_8-x-0.npy"
 train_file_path_y = "data/train_tf_bind_8-y-0.npy"

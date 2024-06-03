@@ -1,20 +1,29 @@
 import sys
 import os
-import numpy as np
-from torch.utils.data import DataLoader
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from lib.model_loading import get_top_models
-from lib.dataset import get_test_data
-from lib.prediction import predict_with_ensemble
+from lib.dataset import get_test_dataset
+from ensembles.ensemble_base import EnsembleBase
+
+
+class HyperdeepEnsemble(EnsembleBase):
+    def __init__(self, num_models, results_filename, models_base_dir):
+        super().__init__(num_models)
+        self.models = get_top_models(
+            num_models, results_filename, models_base_dir
+        )
+
 
 if __name__ == "__main__":
     num_models = 5
-    models = get_top_models(num_models)
+    test_dataset = get_test_dataset()
 
-    test_dataset = get_test_data()
-    test_loader = DataLoader(test_dataset, batch_size=512, shuffle=True)
+    ensemble = HyperdeepEnsemble(
+        num_models,
+        results_filename="study_results2.csv",
+        models_base_dir="saved_models/hyperopt2",
+    )
 
-    ensemble_predictions = predict_with_ensemble(models, test_loader)
-
-    np.save("predictions/hyperdeep.npy", ensemble_predictions)
+    predictions = ensemble.predict(test_dataset)
+    ensemble.save_predictions(predictions, filename="hyperdeep_pred.pkl")

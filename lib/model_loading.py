@@ -1,13 +1,15 @@
 import os
+import sys
 import torch
+import pickle
 import pandas as pd
-from lib.transformer import Transformer
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-RESULTS_FILE = "study_results.csv"
+from lib.transformer import TransformerModel
 
 
-def get_top_models_data(num_models):
-    df = pd.read_csv(RESULTS_FILE)
+def get_top_models_data(num_models, filename):
+    df = pd.read_csv(filename)
     df_sorted = df.sort_values(by="value", ascending=True)
 
     top_k_model_data = df_sorted.head(num_models)
@@ -16,52 +18,59 @@ def get_top_models_data(num_models):
 
 def load_model(model_id, model_params, base_dir="saved_models/hyperopt"):
     model_path = os.path.join(base_dir, f"model_{model_id}.pth")
-    model = Transformer(**model_params)
+    model = TransformerModel(**model_params)
     model.load_state_dict(torch.load(model_path))
     return model
 
 
-def get_top_models(num_models):
-    top_k_model_data = get_top_models_data(num_models)
+def get_top_models(num_models, filename, base_dir):
+    top_k_model_data = get_top_models_data(num_models, filename)
     models = []
 
     for _, row in top_k_model_data.iterrows():
         model_id = row["number"]
 
         model_params = {
-            "hidden_size": int(row["params_hidden_size"]),
-            "feed_forward_size": int(row["params_feed_forward_size"]),
-            "num_heads": int(row["params_num_heads"]),
-            "num_blocks": int(row["params_num_blocks"]),
-            "dropout_rate": float(row["params_dropout_rate"]),
-            "max_seq_length": 8,
-            "vocab_size": 4,
+            "ntoken": 4,
+            "d_model": int(row["params_d_model"]),
+            "nhead": int(row["params_nhead"]),
+            "d_hid": int(row["params_d_hid"]),
+            "nlayers": int(row["params_nlayers"]),
+            "dropout": float(row["params_dropout"]),
+            "device": torch.device("cuda" if torch.cuda.is_available() else "cpu"),
         }
 
-        model = load_model(model_id, model_params)
+        model = load_model(model_id, model_params, base_dir)
         models.append(model)
 
     return models
 
 
-def get_best_params():
-    df = get_top_models_data(1)
+def get_best_params(filename):
+    df = get_top_models_data(1, filename)
 
     train_params = {
         "num_epochs": 30,
-        "lr": df.iloc[0]['params_lr'],
-        "batch_size": df.iloc[0]['params_batch_size'],
-        "patience": 5
+        "lr": df.iloc[0]["params_lr"],
+        "batch_size": int(df.iloc[0]["params_batch_size"]),
+        "patience": 5,
     }
 
     model_params = {
-        "hidden_size": df.iloc[0]['params_hidden_size'],
-        "feed_forward_size": df.iloc[0]['params_feed_forward_size'],
-        "num_heads": df.iloc[0]['params_num_heads'],
-        "num_blocks": df.iloc[0]['params_num_blocks'],
-        "dropout_rate": df.iloc[0]['params_dropout_rate'],
+        "hidden_size": df.iloc[0]["params_hidden_size"],
+        "feed_forward_size": df.iloc[0]["params_feed_forward_size"],
+        "num_heads": df.iloc[0]["params_num_heads"],
+        "num_blocks": df.iloc[0]["params_num_blocks"],
+        "dropout_rate": df.iloc[0]["params_dropout_rate"],
         "max_seq_length": 8,
-        "vocab_size": 4
+        "vocab_size": 4,
     }
 
     return train_params, model_params
+
+
+def load_predictions(model_name, predictions_folder="../predictions"):
+    predictions_path = os.path.join(predictions_folder, f"{model_name}_pred.pkl")
+
+    with open(predictions_path, "rb") as f:
+        return pickle.load(f)

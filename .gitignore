@@ -2,3 +2,4 @@
 /wandb
 /saved_models
 /predictions
+__pycache__/

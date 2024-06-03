@@ -1,3 +1,4 @@
+import torch
 import optuna
 from lib.training import train_model
 
@@ -7,13 +8,13 @@ def objective(trial):
     lr = trial.suggest_float("lr", 1e-5, 1e-2, log=True)
     batch_size = trial.suggest_categorical("batch_size", [32, 64, 128, 256])
 
-    hidden_size = trial.suggest_categorical("hidden_size", [24, 32, 64, 128, 256])
-    feed_forward_size = trial.suggest_categorical(
-        "feed_forward_size", [64, 128, 256, 512]
+    d_model = trial.suggest_categorical("d_model", [32, 64, 128])
+    d_hid = trial.suggest_categorical(
+        "d_hid", [32, 64, 128, 256]
     )
-    num_heads = trial.suggest_categorical("num_heads", [1, 2, 4, 8])
-    num_blocks = trial.suggest_int("num_blocks", 1, 4)
-    dropout_rate = trial.suggest_float("dropout_rate", 0.1, 0.4, step=0.1)
+    nhead = trial.suggest_categorical("nhead", [1, 2, 4])
+    nlayers = trial.suggest_int("nlayers", 1, 3)
+    dropout = trial.suggest_float("dropout", 0.1, 0.5, step=0.1)
 
     train_params = {
         "num_epochs": 30,
@@ -24,17 +25,18 @@ def objective(trial):
     }
 
     model_params = {
-        "hidden_size": hidden_size,
-        "feed_forward_size": feed_forward_size,
-        "num_heads": num_heads,
-        "num_blocks": num_blocks,
-        "dropout_rate": dropout_rate,
-        "max_seq_length": 8,
-        "vocab_size": 4,
+        "ntoken": 4, 
+        "d_model": d_model,
+        "nhead": nhead, 
+        "d_hid": d_hid,
+        "nlayers": nlayers, 
+        "dropout": dropout,
+        "error_type": "homoscedastic",
+        "device":  torch.device("cuda" if torch.cuda.is_available() else "cpu"),
     }
 
     model, loss = train_model(
-        train_params, model_params, save_model=True, folder_name="saved_models/hyperopt"
+        train_params, model_params, save_model=True, folder_name="saved_models/hyperopt3"
     )
 
     return loss
@@ -42,11 +44,11 @@ def objective(trial):
 
 def main():
     study = optuna.create_study(direction="minimize")
-    study.optimize(objective, n_trials=5)
+    study.optimize(objective, n_trials=100)
 
     df = study.trials_dataframe()
 
-    df.to_csv("study_results.csv", index=False)
+    df.to_csv("study_results3.csv", index=False)
 
 
 if __name__ == "__main__":

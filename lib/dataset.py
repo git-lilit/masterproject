@@ -21,6 +21,12 @@ def load_data_from_files(file_path_x, file_path_y):
     return X, y
 
 
+def load_saved_dataset(file_path_x, file_path_y):
+    X = np.load(file_path_x)
+    y = np.load(file_path_y)
+    return NumpyDataset(X, y)
+
+
 def shuffle_and_split_data(X, y, train_ratio=0.8):
     num_samples = len(X)
     indices = np.arange(num_samples)
@@ -39,12 +45,6 @@ def create_datasets(X, y, train_indices, test_indices):
     return train_dataset, test_dataset
 
 
-def load_saved_dataset(file_path_x, file_path_y):
-    X = np.load(file_path_x)
-    y = np.load(file_path_y)
-    return NumpyDataset(X, y)
-
-
 def save_dataset(dataset, file_path_x, file_path_y):
     features = dataset.features.numpy()
     labels = dataset.labels.numpy()
@@ -52,23 +52,27 @@ def save_dataset(dataset, file_path_x, file_path_y):
     np.save(file_path_y, labels)
 
 
-def load_and_split(train_ratio=0.8, is_test_split=False):
+def load_and_split(train_ratio=0.8, use_full_data=False):
     # This function either does train/test split for initial splitting or train/val split for later splits
-    if is_test_split:
-        file_path_x = "data/tf_bind_8-x-0.npy"
-        file_path_y = "data/tf_bind_8-y-0.npy"
-    else:
-        file_path_x = "data/train_tf_bind_8-x-0.npy"
-        file_path_y = "data/train_tf_bind_8-y-0.npy"
-
-    X, y = load_data_from_files(file_path_x, file_path_y)
+    X, y = get_train_data(use_full_data=use_full_data)
     train_indices, rest_indices = shuffle_and_split_data(X, y, train_ratio)
     train_dataset, rest_dataset = create_datasets(X, y, train_indices, rest_indices)
 
     return train_dataset, rest_dataset
 
 
-def get_test_data():
+def get_train_data(use_full_data=True):
+    if use_full_data:
+        file_path_x = "data/tf_bind_8-x-0.npy"
+        file_path_y = "data/tf_bind_8-y-0.npy"
+    else:
+        file_path_x = "data/train_tf_bind_8-x-0.npy"
+        file_path_y = "data/train_tf_bind_8-y-0.npy"
+
+    return load_data_from_files(file_path_x, file_path_y)
+
+
+def get_test_dataset():
     file_path_x = "data/test_tf_bind_8-x-0.npy"
     file_path_y = "data/test_tf_bind_8-y-0.npy"
 

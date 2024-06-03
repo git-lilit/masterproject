@@ -1,116 +1,98 @@
 import math
+import os
+from tempfile import TemporaryDirectory
+from typing import Tuple
+
 import torch
-import torch.nn as nn
+from torch import nn, Tensor
+from torch.nn import TransformerEncoder, TransformerEncoderLayer
+from torch.utils.data import dataset
 
 
-class TransformerBlock(nn.Module):
-    def __init__(self, hidden_size, feed_forward_size, num_heads, dropout_rate):
-        super(TransformerBlock, self).__init__()
-        self.attention = nn.MultiheadAttention(
-            embed_dim=hidden_size, num_heads=num_heads, dropout=dropout_rate
-        )
-        self.feed_forward = nn.Sequential(
-            nn.Linear(hidden_size, feed_forward_size),
-            nn.ReLU(),
-            nn.Linear(feed_forward_size, hidden_size),
-        )
-        self.layer_norm1 = nn.LayerNorm(hidden_size)
-        self.layer_norm2 = nn.LayerNorm(hidden_size)
-        self.dropout = nn.Dropout(dropout_rate)
-
-    def forward(self, x, src_mask=None):
-        attn_output, _ = self.attention(x, x, x, key_padding_mask=src_mask)
-        x = x + self.dropout(attn_output)
-        x = self.layer_norm1(x)
-
-        ff_output = self.feed_forward(x)
-        x = x + self.dropout(ff_output)
-        x = self.layer_norm2(x)
-        return x
-
-
-class PositionalEncoding(nn.Module):
-    def __init__(self, hidden_size, dropout, max_len=5000):
-        super(PositionalEncoding, self).__init__()
-        self.dropout = nn.Dropout(p=dropout)
-
-        # Create constant 'pe' matrix with values dependent on
-        # pos and i
-        pe = torch.zeros(max_len, hidden_size)
-        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(
-            torch.arange(0, hidden_size, 2).float() * (-math.log(10000.0) / hidden_size)
-        )
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-        pe = pe.unsqueeze(0).transpose(0, 1)
-        self.register_buffer("pe", pe)
-
-    def forward(self, x):
-        # Add positional encoding to each token
-        x = x + self.pe[: x.size(0), :]
-        return self.dropout(x)
-
-
-class PositionalEncoding(nn.Module):
-    def __init__(self, hidden_size, dropout, max_len=5000):
-        super(PositionalEncoding, self).__init__()
-        self.dropout = nn.Dropout(p=dropout)
-
-        # Create positional encoding matrix with shape (max_len, hidden_size)
-        pe = torch.zeros(max_len, hidden_size)
-        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(
-            torch.arange(0, hidden_size, 2).float() * (-math.log(10000.0) / hidden_size)
-        )
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-
-        # Add a batch dimension (B x L x D)
-        pe = pe.unsqueeze(0)
-        self.register_buffer("pe", pe)
-
-    def forward(self, x):
-        """
-        x: Tensor, shape [seq_len, batch_size, embedding_dim]
-        """
-        # Make pe the same size as x, up to seq_len
-        x = x + self.pe[:, : x.size(0)]
-        return self.dropout(x)
-
-
-class Transformer(nn.Module):
+class TransformerModel(nn.Module):
     def __init__(
         self,
-        num_blocks,
-        hidden_size,
-        feed_forward_size,
-        num_heads,
-        dropout_rate,
-        vocab_size,
-        max_seq_length,
+        ntoken: int,
+        d_model: int,
+        nhead: int,
+        d_hid: int,
+        nlayers: int,
+        device: torch.device,
+        error_type: str,
+        dropout: float = 0.5,
     ):
-        super(Transformer, self).__init__()
-        self.embedding = nn.Embedding(vocab_size, hidden_size)
-        self.pos_encoder = PositionalEncoding(hidden_size, dropout_rate, max_seq_length)
-        self.layers = nn.ModuleList(
-            [
-                TransformerBlock(
-                    hidden_size, feed_forward_size, num_heads, dropout_rate
-                )
-                for _ in range(num_blocks)
-            ]
+        super().__init__()
+        self.model_type = "Transformer"
+        self.d_model = d_model
+        self.device = device
+        self.error_type = error_type
+
+        self.pos_encoder = PositionalEncoding(d_model, dropout)
+        encoder_layers = TransformerEncoderLayer(d_model, nhead, d_hid, dropout)
+        self.transformer_encoder = TransformerEncoder(encoder_layers, nlayers)
+        self.embedding = nn.Embedding(ntoken, d_model)
+
+        if error_type == "heteroscedastic":
+            self.linear = nn.Linear(d_model, 2)
+        else: 
+            self.linear = nn.Linear(d_model, 1)
+
+        self.init_weights()
+
+    def init_weights(self) -> None:
+        initrange = 0.1
+        self.embedding.weight.data.uniform_(-initrange, initrange)
+        self.linear.bias.data.zero_()
+        self.linear.weight.data.uniform_(-initrange, initrange)
+
+    def forward(self, src: Tensor, src_mask: Tensor = None) -> Tensor:
+        """
+        Arguments:
+            src: Tensor, shape ``[seq_len, batch_size]``
+            src_mask: Tensor, shape ``[seq_len, seq_len]``
+
+        Returns:
+            output Tensor of shape ``[seq_len, batch_size, ntoken]``
+        """
+        src = self.embedding(src) * math.sqrt(self.d_model)
+        src = self.pos_encoder(src)
+        if src_mask is None:
+            """Generate a square causal mask for the sequence. The masked positions are filled with float('-inf').
+            Unmasked positions are filled with float(0.0).
+            """
+            src_mask = nn.Transformer.generate_square_subsequent_mask(len(src)).to(
+                self.device
+            )
+        output = self.transformer_encoder(src, src_mask)
+        output = self.linear(output.mean(dim=1))
+
+        if self.error_type == "heteroscedastic":
+            mean, log_var = output[:, 0], output[:, 1]
+            result = (mean, log_var)
+        else: 
+            result = output
+
+        return result
+
+
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000):
+        super().__init__()
+        self.dropout = nn.Dropout(p=dropout)
+
+        position = torch.arange(max_len).unsqueeze(1)
+        div_term = torch.exp(
+            torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model)
         )
-        self.final_layer_norm = nn.LayerNorm(hidden_size)
-        self.output_layer = nn.Linear(hidden_size, 2)
+        pe = torch.zeros(max_len, 1, d_model)
+        pe[:, 0, 0::2] = torch.sin(position * div_term)
+        pe[:, 0, 1::2] = torch.cos(position * div_term)
+        self.register_buffer("pe", pe)
 
-    def forward(self, x, src_mask=None):
-        x = self.embedding(x)
-        x = self.pos_encoder(x)
-        for layer in self.layers:
-            x = layer(x, src_mask)
-        x = self.final_layer_norm(x)
-        x = self.output_layer(x.mean(dim=1))
-
-        mean, log_var = x[:, 0], x[:, 1]
-        return mean, log_var
+    def forward(self, x: Tensor) -> Tensor:
+        """
+        Arguments:
+            x: Tensor, shape ``[seq_len, batch_size, embedding_dim]``
+        """
+        x = x + self.pe[: x.size(0)]
+        return self.dropout(x)
