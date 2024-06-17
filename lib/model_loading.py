@@ -27,6 +27,11 @@ def get_top_models(num_models, filename, base_dir):
     top_k_model_data = get_top_models_data(num_models, filename)
     models = []
 
+    if "hetero" in filename:
+        num_outputs = 2
+    else: 
+        num_outputs = "homoscedastic"
+
     for _, row in top_k_model_data.iterrows():
         model_id = row["number"]
 
@@ -38,6 +43,7 @@ def get_top_models(num_models, filename, base_dir):
             "nlayers": int(row["params_nlayers"]),
             "dropout": float(row["params_dropout"]),
             "device": torch.device("cuda" if torch.cuda.is_available() else "cpu"),
+            "num_outputs": num_outputs
         }
 
         model = load_model(model_id, model_params, base_dir)
@@ -48,6 +54,12 @@ def get_top_models(num_models, filename, base_dir):
 
 def get_best_params(filename):
     df = get_top_models_data(1, filename)
+    row = df.iloc[0]
+
+    if "hetero" in filename:
+        num_outputs = 2
+    else: 
+        num_outputs = "homoscedastic"
 
     train_params = {
         "num_epochs": 30,
@@ -57,13 +69,14 @@ def get_best_params(filename):
     }
 
     model_params = {
-        "hidden_size": df.iloc[0]["params_hidden_size"],
-        "feed_forward_size": df.iloc[0]["params_feed_forward_size"],
-        "num_heads": df.iloc[0]["params_num_heads"],
-        "num_blocks": df.iloc[0]["params_num_blocks"],
-        "dropout_rate": df.iloc[0]["params_dropout_rate"],
-        "max_seq_length": 8,
-        "vocab_size": 4,
+        "ntoken": 4,
+        "d_model": int(row["params_d_model"]),
+        "nhead": int(row["params_nhead"]),
+        "d_hid": int(row["params_d_hid"]),
+        "nlayers": int(row["params_nlayers"]),
+        "dropout": float(row["params_dropout"]),
+        "device": torch.device("cuda" if torch.cuda.is_available() else "cpu"),
+        "num_outputs": num_outputs
     }
 
     return train_params, model_params

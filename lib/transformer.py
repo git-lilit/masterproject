@@ -1,12 +1,7 @@
 import math
-import os
-from tempfile import TemporaryDirectory
-from typing import Tuple
-
 import torch
 from torch import nn, Tensor
 from torch.nn import TransformerEncoder, TransformerEncoderLayer
-from torch.utils.data import dataset
 
 
 class TransformerModel(nn.Module):
@@ -17,35 +12,42 @@ class TransformerModel(nn.Module):
         nhead: int,
         d_hid: int,
         nlayers: int,
+        ff_size: int,
         device: torch.device,
-        error_type: str,
+        num_outputs: int,
         dropout: float = 0.5,
     ):
         super().__init__()
         self.model_type = "Transformer"
         self.d_model = d_model
         self.device = device
-        self.error_type = error_type
+        self.num_outputs = num_outputs
 
         self.pos_encoder = PositionalEncoding(d_model, dropout)
         encoder_layers = TransformerEncoderLayer(d_model, nhead, d_hid, dropout)
         self.transformer_encoder = TransformerEncoder(encoder_layers, nlayers)
         self.embedding = nn.Embedding(ntoken, d_model)
 
-        if error_type == "heteroscedastic":
-            self.linear = nn.Linear(d_model, 2)
-        else: 
-            self.linear = nn.Linear(d_model, 1)
+        self.feed_forward = torch.nn.Sequential(
+            torch.nn.Linear(d_model, ff_size),
+            torch.nn.ReLU(),
+            torch.nn.Linear(ff_size, ff_size),
+            torch.nn.ReLU(),
+            torch.nn.Linear(ff_size, num_outputs),
+        )
 
         self.init_weights()
 
     def init_weights(self) -> None:
         initrange = 0.1
         self.embedding.weight.data.uniform_(-initrange, initrange)
-        self.linear.bias.data.zero_()
-        self.linear.weight.data.uniform_(-initrange, initrange)
+        for layer in self.feed_forward:
+            if isinstance(layer, nn.Linear):
+                layer.weight.data.uniform_(-initrange, initrange)
+                layer.bias.data.zero_()
 
-    def forward(self, src: Tensor, src_mask: Tensor = None) -> Tensor:
+
+    def forward(self, src: Tensor) -> Tensor:
         """
         Arguments:
             src: Tensor, shape ``[seq_len, batch_size]``
@@ -54,21 +56,21 @@ class TransformerModel(nn.Module):
         Returns:
             output Tensor of shape ``[seq_len, batch_size, ntoken]``
         """
+        
         src = self.embedding(src) * math.sqrt(self.d_model)
         src = self.pos_encoder(src)
-        if src_mask is None:
-            """Generate a square causal mask for the sequence. The masked positions are filled with float('-inf').
-            Unmasked positions are filled with float(0.0).
-            """
-            src_mask = nn.Transformer.generate_square_subsequent_mask(len(src)).to(
-                self.device
-            )
-        output = self.transformer_encoder(src, src_mask)
-        output = self.linear(output.mean(dim=1))
+        output = self.transformer_encoder(src)
 
-        if self.error_type == "heteroscedastic":
-            mean, log_var = output[:, 0], output[:, 1]
-            result = (mean, log_var)
+        # # Permute the dimensions to [batch_size, seq_len, d_model]
+        # permuted_tensor = output.permute(1, 0, 2)
+
+        # # Reshape the tensor to [batch_size, seq_len * d_model]
+        # reshaped_tensor = permuted_tensor.contiguous().view(batch_size, -1)
+
+        output = self.feed_forward(output.mean(dim=0))
+
+        if self.num_outputs == 2:
+            result = output[:, 0], output[:, 1]
         else: 
             result = output
 

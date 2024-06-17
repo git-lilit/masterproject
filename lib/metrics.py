@@ -1,8 +1,8 @@
 import torch
 import numpy as np
-from lib.losses import gaussian_nll_loss
 from scipy.stats import pearsonr, spearmanr
-import matplotlib.pyplot as plt 
+import matplotlib.pyplot as plt
+from torch.nn import GaussianNLLLoss, MSELoss
 
 
 def compute_mean_nll(ensemble_predictions, true_values):
@@ -17,10 +17,12 @@ def compute_mean_nll(ensemble_predictions, true_values):
     torch.Tensor: The averaged NLL value for the ensemble.
     """
     nlls = []
+    loss_fn = GaussianNLLLoss()
+
     for means, log_vars in ensemble_predictions:
-        nll = gaussian_nll_loss(
-            torch.tensor(means), torch.tensor(log_vars), true_values
-        )
+        variances = torch.exp(torch.tensor(log_vars))
+
+        nll = loss_fn(torch.tensor(means), true_values, variances)
         nlls.append(nll)
 
     avg_nll = torch.mean(torch.tensor(nlls))
@@ -38,28 +40,24 @@ def compute_combined_parameters(ensemble_predictions):
     tuple: Two np.arrays, one for combined means and one for combined standard deviations for the ensemble.
     """
     # Extract means and log variances from model predictions
-    means_list = [pred[0] for pred in ensemble_predictions]
-    log_variances_list = [pred[1] for pred in ensemble_predictions]
-
-    # Convert to numpy arrays for easier manipulation
-    means = np.array(means_list)
-    log_variances = np.array(log_variances_list)
-
-    # Convert log variances to variances
-    variances = np.exp(log_variances)
-
-    # Compute the mean of the means
+    means = np.array([pred[0] for pred in ensemble_predictions])
     mean_of_means = np.mean(means, axis=0)
 
-    # Compute the combined variance
-    variance_component = np.mean(variances, axis=0)
     bias_component = np.mean((means - mean_of_means) ** 2, axis=0)
-    combined_log_variances = variance_component + bias_component
+    combined_variances = bias_component
 
-    # Convert combined variances back to log variances
-    combined_log_variances = np.log(combined_log_variances)
+    variance_of_the_first_model = ensemble_predictions[0][1]
+    if variance_of_the_first_model is not None:
+        log_variances = np.array([pred[1] for pred in ensemble_predictions])
+        variances = np.exp(log_variances)
+        variance_component = np.mean(variances, axis=0)
+        combined_variances += variance_component
 
-    return torch.tensor(mean_of_means), torch.tensor(combined_log_variances)
+    combined_log_variances = np.log(combined_variances)
+
+    return torch.tensor(mean_of_means).reshape(-1), torch.tensor(
+        combined_log_variances
+    ).reshape(-1)
 
 
 def calculate_picp_with_intervals(means, stds, true_values, confidence_level=0.95):
@@ -126,17 +124,21 @@ def calculate_all_metrics(ensemble_predictions, true_values):
         ensemble_predictions
     )
 
-    stds = np.sqrt(np.exp(combined_log_variances))
+    variances = np.exp(combined_log_variances)
+    stds = np.sqrt(variances)
     errors = np.abs(true_values.reshape(-1) - mean_of_means)
+    loss_fn = GaussianNLLLoss()
 
     results = {
-        "mean_nll": compute_mean_nll(ensemble_predictions, true_values),
-        "combined_nll": gaussian_nll_loss(
-            mean_of_means, combined_log_variances, true_values
-        ),
+        "combined_nll": loss_fn(mean_of_means, true_values, variances),
         "picp": calculate_picp_with_intervals(mean_of_means, stds, true_values),
-        "correlations": calculate_correlations(combined_log_variances, errors),
+        "correlations_uncertainty": calculate_correlations(combined_log_variances, errors),
+        # "correlations_predictions": calculate_correlations(mean_of_means, true_values),
     }
+
+    variance_of_the_first_model = ensemble_predictions[0][1]
+    if variance_of_the_first_model is not None:
+        results["mean_nll"] = compute_mean_nll(ensemble_predictions, true_values)
 
     return results
 
@@ -177,4 +179,60 @@ def calibration_plot(predictions, true_values, num_bins=10):
     plt.title("Calibration Plot")
     plt.legend()
     plt.grid(True)
+    plt.show()
+
+
+def visualize_intervals(true_values, means, variances, num_points=None):
+    """
+    Visualizes prediction intervals.
+
+    Parameters:
+    true_values (np.array): Array of true values.
+    means (np.array): Array of mean predictions.
+    variances (np.array): Array of log variances of the predictions.
+    num_points (int): Number of points to plot. If None, plot all points.
+
+    The plot will show:
+    - Mean predictions with a solid line.
+    - 1 standard deviation intervals with a semi-transparent shading.
+    - 2 standard deviation intervals with a lighter semi-transparent shading.
+    - Perfect line (y=x) for reference.
+    """
+    # Convert inputs to numpy arrays if they are not
+    true_values = np.array(true_values)
+    means = np.array(means)
+    
+    if num_points is not None and num_points < len(true_values):
+        indices = np.random.choice(len(true_values), num_points, replace=False)
+        true_values = true_values[indices]
+        means = means[indices]
+        variances = variances[indices]
+    
+    std_devs = np.sqrt(variances)
+    
+    # Calculate the intervals
+    one_std_up = means + std_devs
+    one_std_down = means - std_devs
+    two_std_up = means + 2 * std_devs
+    two_std_down = means - 2 * std_devs
+
+    # Create the plot
+    plt.figure(figsize=(10, 6))
+
+    # Plot the perfect line
+    plt.plot(true_values, true_values, 'r--', label='Perfect Line (y=x)')
+
+    # Plot the mean predictions and intervals
+    for i in range(len(true_values)):
+        plt.plot([true_values[i], true_values[i]], [two_std_down[i], two_std_up[i]], color='blue', alpha=0.1)  # 2 Std Dev
+        plt.plot([true_values[i], true_values[i]], [one_std_down[i], one_std_up[i]], color='blue', alpha=0.2)  # 1 Std Dev
+        plt.plot(true_values[i], means[i], 'o', color='blue')  # Mean Prediction
+
+    # Add labels and legend
+    plt.xlabel('True Values')
+    plt.ylabel('Predicted Values')
+    plt.title('Prediction Intervals')
+    plt.legend()
+
+    # Show the plot
     plt.show()

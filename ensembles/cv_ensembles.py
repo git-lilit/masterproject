@@ -44,7 +44,7 @@ class CVEnsemble(EnsembleBase):
             model, loss = train_model(
                 self.train_params,
                 self.model_params,
-                save_model=True,
+                save_model=False,
                 folder_name="saved_models/ensembles/cv",
                 loaders=[train_loader, val_loader]
             )
@@ -59,7 +59,7 @@ if __name__ == "__main__":
     num_models = 5
     test_dataset = get_test_dataset()
 
-    ensemble = CVEnsemble(num_models, results_filename="study_results2.csv")
+    ensemble = CVEnsemble(num_models, results_filename="study_results3_homo.csv")
 
     predictions = ensemble.predict(test_dataset)
-    ensemble.save_predictions(predictions, filename="cv_pred.pkl")
+    ensemble.save_predictions(predictions, filename="results3_homo/cv_pred.pkl")

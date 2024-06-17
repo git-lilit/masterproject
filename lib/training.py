@@ -9,6 +9,7 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 from lib.dataset import load_and_split
 from lib.transformer import TransformerModel
+from lib.regression import RegressionFromTokens
 
 
 def initialize_device():
@@ -31,7 +32,10 @@ def prepare_data_loaders(train_params, loaders=None):
 
 
 def setup_components(model_params, train_params):
-    model = TransformerModel(**model_params).to(model_params["device"])
+    if train_params["model_type"] == "regression":
+        model = RegressionFromTokens(**model_params).to(model_params["device"])
+    else:
+        model = TransformerModel(**model_params).to(model_params["device"])
     optimizer = optim.Adam(model.parameters(), lr=train_params["lr"])
     scheduler = ReduceLROnPlateau(
         optimizer, mode="min", factor=0.1, patience=3, verbose=True
@@ -46,13 +50,15 @@ def log_model_info(model, params):
     return num_trainable_params
 
 
-def train_epoch(model, train_loader, optimizer, loss_fn, error_type, device):
+def train_epoch(model, train_loader, optimizer, loss_fn, num_outputs, device):
     model.train()
     total_train_loss = 0
     for inputs, targets in train_loader:
+        inputs = inputs.transpose(0, 1)
         inputs, targets = inputs.to(device), targets.to(device)
+        #try putting it in 65
         optimizer.zero_grad()
-        if error_type == "heteroscedastic":
+        if num_outputs == 2:
             mean_pred, log_var_pred = model(inputs)
             var_pred = torch.exp(log_var_pred)
             loss = loss_fn(mean_pred, targets, var_pred)
@@ -65,13 +71,14 @@ def train_epoch(model, train_loader, optimizer, loss_fn, error_type, device):
     return total_train_loss / len(train_loader)
 
 
-def validate_epoch(model, val_loader, loss_fn, error_type, device):
+def validate_epoch(model, val_loader, loss_fn, num_outputs, device):
     model.eval()
     total_val_loss = 0
     with torch.no_grad():
         for inputs, targets in val_loader:
+            inputs = inputs.transpose(0, 1)
             inputs, targets = inputs.to(device), targets.to(device)
-            if error_type == "heteroscedastic":
+            if num_outputs == 2:
                 mean_pred, log_var_pred = model(inputs)
                 var_pred = torch.exp(log_var_pred)
                 loss = loss_fn(mean_pred, targets, var_pred)
@@ -82,15 +89,15 @@ def validate_epoch(model, val_loader, loss_fn, error_type, device):
     return total_val_loss / len(val_loader)
 
 
-def train_model(train_params, model_params, save_model, folder_name, loaders=None):
+def train_model(train_params, model_params, save_model, folder_name=None, loaders=None):
     device = initialize_device()
     model_params["device"] = device
-    error_type = model_params["error_type"]
+    num_outputs = model_params["num_outputs"]
 
     train_loader, val_loader = prepare_data_loaders(train_params, loaders)
     model, optimizer, scheduler = setup_components(model_params, train_params)
 
-    if error_type == "heteroscedastic":
+    if num_outputs == 2:
         loss_fn = GaussianNLLLoss()
     else:
         loss_fn = MSELoss()
@@ -107,8 +114,8 @@ def train_model(train_params, model_params, save_model, folder_name, loaders=Non
     best_model_state = None
 
     for epoch in tqdm(range(train_params["num_epochs"]), desc="Epochs"):
-        avg_train_loss = train_epoch(model, train_loader, optimizer, loss_fn, error_type, device)
-        avg_val_loss = validate_epoch(model, val_loader, loss_fn, error_type, device)
+        avg_train_loss = train_epoch(model, train_loader, optimizer, loss_fn, num_outputs, device)
+        avg_val_loss = validate_epoch(model, val_loader, loss_fn, num_outputs, device)
 
         print(f"Epoch {epoch+1}, Training Average Loss: {avg_train_loss}")
         print(f"Epoch {epoch+1}, Validation Average Loss: {avg_val_loss}")

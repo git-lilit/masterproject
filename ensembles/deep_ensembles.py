@@ -26,7 +26,7 @@ class DeepEnsemble(EnsembleBase):
                 self.train_params,
                 self.model_params,
                 save_model=True,
-                folder_name="saved_models/ensembles/deep",
+                folder_name="saved_models/ensembles/deep3_homo",
             )
             models.append(model)
 
@@ -36,7 +36,7 @@ class DeepEnsemble(EnsembleBase):
 if __name__ == "__main__":
     num_models = 5
     test_dataset = get_test_dataset()
-    ensemble = DeepEnsemble(num_models, results_filename="study_results2.csv")
+    ensemble = DeepEnsemble(num_models, results_filename="study_results3_homo.csv")
 
     predictions = ensemble.predict(test_dataset)
-    ensemble.save_predictions(predictions, filename="deep_pred.pkl")
+    ensemble.save_predictions(predictions, filename="results3_homo/deep_pred.pkl")

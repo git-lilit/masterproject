@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import pickle
 import torch
@@ -47,5 +48,8 @@ class EnsembleBase:
         return all_predictions, targets
 
     def save_predictions(self, predictions, filename="ensemble_predictions.pkl"):
-        with open(f"predictions/{filename}", "wb") as f:
+        file_path = f"predictions/{filename}"
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+
+        with open(file_path, "wb") as f:
             pickle.dump(predictions, f)

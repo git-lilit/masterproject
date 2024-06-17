@@ -42,9 +42,9 @@ if __name__ == "__main__":
 
     ensemble = MCDropoutEnsemble(
         num_samples=5,
-        results_filename="study_results2.csv",
-        models_base_dir="saved_models/hyperopt2",
+        results_filename="study_results3_homo.csv",
+        models_base_dir="saved_models/hyperopt3_homo",
     )
 
     predictions = ensemble.predict(test_dataset, batch_size=512)
-    ensemble.save_predictions(predictions, filename="dropout_pred.pkl")
+    ensemble.save_predictions(predictions, filename="results3_homo/dropout_pred.pkl")
