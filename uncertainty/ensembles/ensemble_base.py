@@ -6,8 +6,9 @@ from torch.utils.data import DataLoader
 
 
 class EnsembleBase:
-    def __init__(self, num_models):
+    def __init__(self, num_models, device):
         self.num_models = num_models
+        self.device = device
 
     def get_models(self):
         raise NotImplementedError("Subclasses should implement this method")
@@ -15,11 +16,12 @@ class EnsembleBase:
     def predict_one_model(self, model, test_loader):
         model_mus = []
         model_log_vars = []
-        model.to("cuda" if torch.cuda.is_available() else "cpu")
+        model.to(self.device)
 
         with torch.no_grad():  # Disable gradient calculation
             for batch_idx, (inputs, targets) in enumerate(test_loader):
-                inputs = inputs.to("cuda" if torch.cuda.is_available() else "cpu")
+                inputs = inputs.transpose(0, 1)
+                inputs = inputs.to(self.device)
                 outputs = model(inputs)
                 if isinstance(outputs, tuple):
                     mu, log_var = outputs

@@ -7,27 +7,26 @@ from torch.nn import GaussianNLLLoss, MSELoss
 from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
-from lib.dataset import load_and_split
+from lib.dataset import get_saved_dataset, split_dataset
 from lib.transformer import TransformerModel
-from lib.regression import RegressionFromTokens
+from debug.regression import RegressionFromTokens
 
 
 def initialize_device():
-    os.environ["CUDA_VISIBLE_DEVICES"] = "5,7"
+    os.environ["CUDA_VISIBLE_DEVICES"] = "5,6"
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def prepare_data_loaders(train_params, loaders=None):
-    if loaders is None:
-        train_dataset, val_dataset = load_and_split(use_full_data=False)
-        train_loader = DataLoader(
-            train_dataset, batch_size=train_params["batch_size"], shuffle=True
-        )
-        val_loader = DataLoader(
-            val_dataset, batch_size=train_params["batch_size"], shuffle=True
-        )
-    else:
-        train_loader, val_loader = loaders
+def prepare_data_loaders(train_params):
+    dataset = get_saved_dataset(type="train_random")
+    train_dataset, val_dataset = split_dataset(dataset, train_ratio=0.8, split_type="random")
+
+    train_loader = DataLoader(
+        train_dataset, batch_size=train_params["batch_size"], shuffle=True
+    )
+    val_loader = DataLoader(
+        val_dataset, batch_size=train_params["batch_size"], shuffle=True
+    )
     return train_loader, val_loader
 
 
@@ -94,7 +93,11 @@ def train_model(train_params, model_params, save_model, folder_name=None, loader
     model_params["device"] = device
     num_outputs = model_params["num_outputs"]
 
-    train_loader, val_loader = prepare_data_loaders(train_params, loaders)
+    if loaders is None:
+        train_loader, val_loader = prepare_data_loaders(train_params)
+    else: 
+        train_loader, val_loader = loaders
+
     model, optimizer, scheduler = setup_components(model_params, train_params)
 
     if num_outputs == 2:

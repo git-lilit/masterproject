@@ -60,7 +60,7 @@ def compute_combined_parameters(ensemble_predictions):
     ).reshape(-1)
 
 
-def calculate_picp_with_intervals(means, stds, true_values, confidence_level=0.95):
+def calculate_picp_and_piw(means, stds, true_values, confidence_level=0.95):
     """
     Calculate the Prediction Interval Coverage Probability (PICP) given mean and standard deviation predictions.
 
@@ -83,14 +83,19 @@ def calculate_picp_with_intervals(means, stds, true_values, confidence_level=0.9
         return 0.0
 
     coverage_count = 0
+    piw_values = []
+
     for mu, sigma, y in zip(means, stds, true_values):
         L_i = mu - z_score * sigma
         U_i = mu + z_score * sigma
+        piw_values.append(U_i - L_i)
         if L_i <= y <= U_i:
             coverage_count += 1
 
     picp = coverage_count / n
-    return picp
+    piw = np.mean(piw_values)
+
+    return picp, piw
 
 
 def calculate_correlations(x, y):
@@ -113,9 +118,7 @@ def calculate_correlations(x, y):
     # Return results as a dictionary
     return {
         "pearson_corr": pearson_corr,
-        "pearson_p_value": pearson_p_value,
         "spearman_corr": spearman_corr,
-        "spearman_p_value": spearman_p_value,
     }
 
 
@@ -131,9 +134,9 @@ def calculate_all_metrics(ensemble_predictions, true_values):
 
     results = {
         "combined_nll": loss_fn(mean_of_means, true_values, variances),
-        "picp": calculate_picp_with_intervals(mean_of_means, stds, true_values),
+        "intervals": calculate_picp_and_piw(mean_of_means, stds, true_values),
         "correlations_uncertainty": calculate_correlations(combined_log_variances, errors),
-        # "correlations_predictions": calculate_correlations(mean_of_means, true_values),
+        "correlations_predictions": calculate_correlations(mean_of_means, true_values.reshape(-1)),
     }
 
     variance_of_the_first_model = ensemble_predictions[0][1]

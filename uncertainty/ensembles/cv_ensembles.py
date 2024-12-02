@@ -5,23 +5,25 @@ from sklearn.model_selection import KFold
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from lib.dataset import get_test_dataset, get_train_data, NumpyDataset
-from lib.training import train_model
+from lib.dataset import NumpyDataset, get_saved_dataset
+from lib.training import train_model, initialize_device
 from lib.model_loading import get_best_params
 from ensembles.ensemble_base import EnsembleBase
 from torch.utils.data import DataLoader
 
 
 class CVEnsemble(EnsembleBase):
-    def __init__(self, num_models, results_filename):
-        super().__init__(num_models)
+    def __init__(self, num_models, device, results_filename):
+        super().__init__(num_models, device)
         self.train_params, self.model_params = get_best_params(results_filename)
+        print(self.model_params)
         self.models = self.get_models()
 
     def get_models(self):
         models = []
         kf = KFold(n_splits=self.num_models, shuffle=True, random_state=42)
-        X, y = get_train_data(use_full_data=False)
+        dataset = get_saved_dataset(type="train_random")
+        X, y = dataset.features, dataset.labels
 
         for i, (train_index, val_index) in enumerate(kf.split(X)):
             print(f"Training model {i + 1}/{self.num_models}")
@@ -40,8 +42,7 @@ class CVEnsemble(EnsembleBase):
                 val_dataset, batch_size=self.train_params["batch_size"], shuffle=True
             )
 
-            # Initialize and train the model
-            model, loss = train_model(
+            model, _ = train_model(
                 self.train_params,
                 self.model_params,
                 save_model=False,
@@ -49,7 +50,6 @@ class CVEnsemble(EnsembleBase):
                 loaders=[train_loader, val_loader]
             )
 
-            # Store the trained model
             models.append(model)
 
         return models
@@ -57,9 +57,10 @@ class CVEnsemble(EnsembleBase):
 
 if __name__ == "__main__":
     num_models = 5
-    test_dataset = get_test_dataset()
+    test_dataset = get_saved_dataset(type="test_random")
+    device = initialize_device()
 
-    ensemble = CVEnsemble(num_models, results_filename="study_results3_homo.csv")
+    ensemble = CVEnsemble(num_models, device=device, results_filename="study_results/study_results_ff_homo.csv")
 
     predictions = ensemble.predict(test_dataset)
-    ensemble.save_predictions(predictions, filename="results3_homo/cv_pred.pkl")
+    ensemble.save_predictions(predictions, filename="results_homo/cv_pred.pkl")

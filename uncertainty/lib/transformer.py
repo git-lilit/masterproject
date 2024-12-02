@@ -31,8 +31,6 @@ class TransformerModel(nn.Module):
         self.feed_forward = torch.nn.Sequential(
             torch.nn.Linear(d_model, ff_size),
             torch.nn.ReLU(),
-            torch.nn.Linear(ff_size, ff_size),
-            torch.nn.ReLU(),
             torch.nn.Linear(ff_size, num_outputs),
         )
 

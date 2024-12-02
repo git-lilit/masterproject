@@ -10,7 +10,7 @@ from lib.transformer import TransformerModel
 
 def get_top_models_data(num_models, filename):
     df = pd.read_csv(filename)
-    df_sorted = df.sort_values(by="value", ascending=True)
+    df_sorted = df.sort_values(by="value", ascending=False)
 
     top_k_model_data = df_sorted.head(num_models)
     return top_k_model_data
@@ -23,14 +23,14 @@ def load_model(model_id, model_params, base_dir="saved_models/hyperopt"):
     return model
 
 
-def get_top_models(num_models, filename, base_dir):
+def get_top_models(num_models, filename, base_dir, device):
     top_k_model_data = get_top_models_data(num_models, filename)
     models = []
 
     if "hetero" in filename:
         num_outputs = 2
     else: 
-        num_outputs = "homoscedastic"
+        num_outputs = 1
 
     for _, row in top_k_model_data.iterrows():
         model_id = row["number"]
@@ -42,8 +42,9 @@ def get_top_models(num_models, filename, base_dir):
             "d_hid": int(row["params_d_hid"]),
             "nlayers": int(row["params_nlayers"]),
             "dropout": float(row["params_dropout"]),
-            "device": torch.device("cuda" if torch.cuda.is_available() else "cpu"),
-            "num_outputs": num_outputs
+            "ff_size": int(row["params_ff_size"]),
+            "num_outputs": num_outputs,
+            "device": device
         }
 
         model = load_model(model_id, model_params, base_dir)
@@ -59,13 +60,14 @@ def get_best_params(filename):
     if "hetero" in filename:
         num_outputs = 2
     else: 
-        num_outputs = "homoscedastic"
+        num_outputs = 1
 
     train_params = {
-        "num_epochs": 30,
+        "num_epochs": 40,
         "lr": df.iloc[0]["params_lr"],
         "batch_size": int(df.iloc[0]["params_batch_size"]),
         "patience": 5,
+        "model_type": "transformer"
     }
 
     model_params = {
@@ -75,6 +77,7 @@ def get_best_params(filename):
         "d_hid": int(row["params_d_hid"]),
         "nlayers": int(row["params_nlayers"]),
         "dropout": float(row["params_dropout"]),
+        "ff_size": int(row["params_ff_size"]),
         "device": torch.device("cuda" if torch.cuda.is_available() else "cpu"),
         "num_outputs": num_outputs
     }

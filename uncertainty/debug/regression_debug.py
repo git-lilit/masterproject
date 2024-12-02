@@ -1,5 +1,5 @@
 from lib.transformer import TransformerModel
-from lib.dataset import get_train_data
+from lib.dataset import get_saved_data
 import os
 import torch
 import wandb
@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from lib.training import *
 from lib.dataset import get_test_dataset
-from lib.regression import RegressionFromTokens
+from debug.regression import RegressionFromTokens
 from lib.metrics import calculate_correlations
 
 def load_model(model_id, model_params, base_dir="saved_models/hyperopt"):
@@ -30,7 +30,6 @@ train_params = {
 model_params = {
     "num_tokens": 4,
     "num_outputs": 1,
-    "num_outputs": "homoscedastic",
     "model_params": torch.device("cuda" if torch.cuda.is_available() else "cpu"),
 }
 
