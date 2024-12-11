@@ -62,7 +62,7 @@ class ReplayBuffer:
 
             # Concatenate the random and best sequences and rewards
             final_sequences = torch.cat([final_sequences, best_final_sequences], dim=0)
-            total_rewards = torch.cat([total_rewards, best_total_rewards], dim=0)
+            total_rewards = torch.cat([total_rewards, best_total_rewards], dim=0).squeeze(1)
 
         batch_size = final_sequences.shape[0]
         seq_len = final_sequences.shape[1]
@@ -75,18 +75,17 @@ class ReplayBuffer:
         actions = final_sequences[:, cut_point]
 
         # Next states (cut at the same location for every sequence)
-        next_states = final_sequences[:, :cut_point + 1]
+        next_states = final_sequences[:, : cut_point + 1]
 
         # Convert the boolean comparison to tensor for rewards and done masks
         if cut_point == seq_len - 1:
             rewards = total_rewards
-            done_masks = torch.ones((n, ))
+            done_masks = torch.ones((n,))
         else:
-            rewards = torch.zeros((n, ))
-            done_masks = torch.zeros((n, ))
+            rewards = torch.zeros((n,))
+            done_masks = torch.zeros((n,))
 
         return states, actions, rewards, next_states, done_masks, total_rewards
-
 
     def size(self):
         return len(self.buffer)
@@ -99,4 +98,3 @@ class ReplayBuffer:
         max_reward = rewards.max().item()
 
         return max_reward
-

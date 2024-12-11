@@ -1,111 +1,77 @@
 import wandb
 import hydra
-import torch
-import torch.optim as optim
-from lib.utils import set_seed
 from omegaconf import DictConfig
-from lib.ReplayBuffer import ReplayBuffer
-from lib.training import train_one_episode, log_and_evaluate, create_fixed_batch
-from lib.SequenceModel import SequenceModel
+from hydra.core.hydra_config import HydraConfig
+
 from lib.TFBindChecker import TFBindChecker
+from lib.utils import set_seed, initialize_device, compute_auc
+from lib.DQNAgent import DQNAgent
+from lib.dataset_splits import get_saved_dataset, RandomSplit
 
 
 @hydra.main(version_base=None, config_path="", config_name="config")
-def train(config: DictConfig):
-    wandb_log = True
-    device = torch.device("cuda:5")
+def main(config: DictConfig):
+    wandb_log = False
+
+    # Seed setting
+    import torch.backends.cudnn as cudnn
+
     set_seed(config.seed)
+    cudnn.benchmark = False
+    cudnn.deterministic = True
 
-    test_fn_params = {
-        "dim": 8,
-        "num_states": 4
-    }
-
-    checker = TFBindChecker(data_folder="data")
-    test_fn = checker.test_fn
+    # Initialize all params
+    task_info = {"num_states": 4, "seq_len": 8}
 
     model_params = {
-        "embedding_dim": 16,
+        "embedding_dim": 128,
         "num_heads": 4,
-        "output_dim": test_fn_params["num_states"],
-        "vocab_size": test_fn_params["num_states"] + 2,
-        "seq_len": test_fn_params["dim"]
+        "output_dim": task_info["num_states"],
+        "vocab_size": task_info["num_states"] + 2,
+        "seq_len": task_info["seq_len"],
     }
 
-    train_info = {
-        "episodes": [],
-        "max_scores": [],
-        "epsilons": [],
-        "losses": [],
-        "td_errors": [],
-        "total_rewards_sum": 0,
-        "mean_scores": [],
-        "mean_losses": [],
-        "mean_td_errors": [],
-        "mean_top_fives": [],
-        "max_qs": [],
+    train_params_fixed = {
+        "training_mode": "offline",
+        "n_episodes": 10000,
+        "print_interval": 100,
+        "deterministic": True,
+        "esp": None,  # early stopping patience
     }
 
+    train_params = {**task_info, **train_params_fixed, **config}
+
+    # Initialize WandB
     if wandb_log == True:
+        # job_num = str(HydraConfig.get().job.num)
         wandb.init(
             project="dqn",
-            config={**config},
-            name="Holo_MC_more_exploration_and_patience_16"
+            config={**model_params, **train_params},
+            name="with_priority",
+            # group="tau_search",
+            reinit=True,
         )
 
-    n_episodes = 2500
-    print_interval = 100
-    early_stopping_patience = 15
+    X, y = get_saved_dataset()
+    X_train, y_train, X_test, y_test = RandomSplit(X, y).split(train_size=0.5)
+    train_set = (X_train, y_train)
 
-    best_mean_score = float('-inf')
-    patience_counter = 0
+    agent = DQNAgent(
+        wandb_log=wandb_log,
+        device=initialize_device(),
+        model_params=model_params,
+        test_fn=TFBindChecker(data_folder="data").test_fn,
+        dataset=train_set
+    )
 
-    # Initialize model
-    q = SequenceModel(**model_params, device=device)
-    q_target = SequenceModel(**model_params, device=device)
+    all_episode_stats, interval_stats = agent.train(train_params)
 
-    q_target.load_state_dict(q.state_dict())
+    auc = compute_auc(interval_stats)
+    last_episodes_rewards = interval_stats['seq_reward'][-10:]
+    mean_last_episodes = sum(last_episodes_rewards)/len(last_episodes_rewards)
 
-    memory = ReplayBuffer(buffer_limit=int(config["buffer_size"]))
-    optimizer = optim.Adam(q.parameters(), lr=config["lr"])
-
-    fixed_state_batch = create_fixed_batch(config, test_fn_params, q, device)
-
-    for episode in range(n_episodes):
-        epsilon = train_one_episode(q, q_target, memory, optimizer, config, episode,
-                                    n_episodes, train_info, test_fn, test_fn_params, device)
-        train_info["epsilons"].append(epsilon)
-
-        if episode % print_interval == 0 and episode != 0 and episode > config["learning_starts"]:
-            mean_score = log_and_evaluate(q, memory, train_info, config, episode, test_fn, test_fn_params, fixed_state_batch, device)
-            
-            if mean_score > best_mean_score:
-                best_mean_score = mean_score
-                patience_counter = 0
-            else:
-                patience_counter += 1
-            
-            if patience_counter >= early_stopping_patience:
-                print(f"Early stopping triggered. No improvement in mean score for {early_stopping_patience * print_interval} episodes.")
-                break
-
-            episode_stats = {
-                "episode": episode,
-                "buffer_size": memory.size(),
-                "epsilon": epsilon,
-                "mean_score": train_info["mean_scores"][-1],
-                "max_score": train_info["max_scores"][-1],
-                "mean_loss": train_info["mean_losses"][-1],
-                "mean_td_errors": train_info["mean_td_errors"][-1],
-                "mean_top_5_score": train_info["mean_top_fives"][-1],  # Convert tensor to scalar if necessary
-                "max_q": train_info["max_qs"][-1]
-            }
-
-            if wandb_log == True:
-                wandb.log(episode_stats)
-
-    return best_mean_score
+    return auc, mean_last_episodes
 
 
 if __name__ == "__main__":
-    train()
+    main()
