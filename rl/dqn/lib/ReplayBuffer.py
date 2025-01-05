@@ -51,20 +51,20 @@ class ReplayBuffer:
         )
 
     def sample_steps(self, n, fraction_best):
+        n_samples_random = int((1 - fraction_best) * n)
         # Sample random and best episodes
         final_sequences, total_rewards = self.sample_episodes_randomly(
-            int((1 - fraction_best) * n)
+            n_samples_random
         )
         if fraction_best > 0:
             best_final_sequences, best_total_rewards = self.sample_episodes_priority(
-                int(fraction_best * n)
+                n - n_samples_random
             )
 
             # Concatenate the random and best sequences and rewards
             final_sequences = torch.cat([final_sequences, best_final_sequences], dim=0)
             total_rewards = torch.cat([total_rewards, best_total_rewards], dim=0).squeeze(1)
 
-        batch_size = final_sequences.shape[0]
         seq_len = final_sequences.shape[1]
 
         # Generate a single cut point for the entire batch
