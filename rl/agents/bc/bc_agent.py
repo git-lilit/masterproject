@@ -1,15 +1,11 @@
 import wandb
 import torch
 import collections
-import pandas as pd
 import torch.optim as optim
-from lib.ReplayBuffer import ReplayBuffer
-from lib.training_utils import (
-    sample_sequences_bc,
-)
-from lib.SequenceModel import SequenceModel
 import torch.nn.functional as F
 
+from lib.replay_buffer import ReplayBuffer
+from lib.sequence_model import SequenceModel
 
 
 class BCAgent:
@@ -34,7 +30,7 @@ class BCAgent:
         self.memory.put(X, y)
 
         for episode in range(params["n_episodes"]):
-            loss = self.train_one_episode(episode, params)
+            loss = self.train_step(params)
 
             current_episode_stats = {
                 "episode": episode,
@@ -65,24 +61,6 @@ class BCAgent:
 
         return all_episode_stats, all_interval_stats
 
-
-    def train_one_episode(self, episode, params):
-        """Performs training for one episode, including gradient updates."""
-        losses = []
-
-        for _ in range(params["gradient_steps"]):
-            loss = self.train_step(
-               self.model, self.memory, self.optimizer, params, self.device
-            )
-
-            # Append values to lists
-            losses.append(loss)
-
-        # Compute mean loss and TD error
-        mean_loss = sum(losses) / len(losses)
-
-        return mean_loss
-
     def log_stats(self, episode_stats, interval_stats):
         print(
             f"Episode N: {episode_stats["episode"]:} | "
@@ -106,54 +84,73 @@ class BCAgent:
     def evaluate(self, params):
         """Logs and evaluates the model's performance at regular intervals."""
         # Sample sequences for evaluation
-        state_batch = sample_sequences_bc(
-            self.model,
-            batch_size=1,
-            start_token=params["num_actions"],
-            seq_len=params["seq_len"],
-            device=self.device,
-        )
+        state_batch = self.sample_sequences(batch_size=1, params=params)
 
         rewards_mean = torch.mean(self.test_fn(state_batch))
 
         return rewards_mean
-    
+
     def train_step(self, params):
         """
         Perform a single training step for Behavioral Cloning (BC).
 
         Args:
-            model (nn.Module): The neural network to train.
-            memory: The replay memory object containing (state, action) pairs.
-            optimizer (torch.optim.Optimizer): Optimizer for training.
             params (dict): Configuration dictionary with parameters like batch_size.
-            device (str): Device to perform training on ('cuda' or 'cpu').
 
         Returns:
             float: The loss value for the training step.
         """
-        # Sample transitions from memory (only state-action pairs are needed for BC)
-        transitions = self.memory.sample_steps(params["batch_size"], params["fraction_best"])
-        states, actions, _, _, _, _ = transitions  # Ignore rewards, next_states, and masks for BC
+        transitions = self.memory.sample_steps(
+            params["batch_size"], params["fraction_best"]
+        )
+        states, actions, _, _, _, _ = (
+            transitions
+        )
 
-        # Move data to the specified device
         states = states.long().to(self.device)
         actions = actions.to(self.device)
 
-        # Ensure the model is on the correct device
-        model = model.to(self.device)
+        model = self.model.to(self.device)
 
-        # Reset optimizer gradients
         self.optimizer.zero_grad()
-
-        # Compute predictions for the current states
-        logits = model(states)  # Shape: (batch_size, num_actions)
-
-        # Compute loss using cross-entropy
+        logits = model(states)
         loss = F.cross_entropy(logits, actions.long())
 
-        # Perform backpropagation and optimizer step
         loss.backward()
         self.optimizer.step()
 
         return loss.item()
+
+    def sample_sequences(self, batch_size, params):
+        """
+        Samples sequences using the given Behavioral Cloning model.
+
+        Args:
+            model (nn.Module): The behavioral cloning model (typically a neural network).
+            batch_size (int): Number of sequences to sample.
+            start_token (int): Starting token for the sequences.
+            seq_len (int): Length of each sequence.
+            device (str): Device to perform sampling on ('cuda' or 'cpu').
+
+        Returns:
+            torch.Tensor: Generated sequences of shape (batch_size, seq_len).
+        """
+        start_token = params["num_actions"]
+        seq_len = params["seq_len"]
+        model = self.model.to(self.device)
+
+        state_batch = torch.full(
+            (batch_size, 1), start_token, dtype=torch.long, device=self.device
+        )
+
+        for _ in range(seq_len):
+            with torch.no_grad():
+                action_probs = model(
+                    state_batch
+                )
+                actions = torch.argmax(action_probs, dim=1).unsqueeze(1)
+
+            state_batch = torch.cat((state_batch, actions), dim=1)
+
+        generated_sequence = state_batch[:, 1:]
+        return generated_sequence

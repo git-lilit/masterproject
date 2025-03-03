@@ -1,0 +1,28 @@
+defaults:
+  - _self_  
+  - override hydra/launcher: joblib 
+seed: 42
+gpu_id: 5
+gamma: 1
+learning_starts: 0
+gradient_steps: 1
+exploration_fraction: 0.4
+exploration_initial_eps: 1.0
+exploration_final_eps: 0
+buffer_size: 500000
+fraction_best: 0.4
+tau: 0.055
+embedding_dim: 64
+num_heads: 8
+batch_size: 256
+lr: 0.00095
+cql_alpha: 0.00246
+beta: 0.003
+
+# agent_type should be from (bc, dqn, dsac, ensemble)
+# integration type should be from (var, min, rem)
+agent_type: dqn
+# integration_type: var
+
+# if true, simulate a failure by raising an exception
+error: false

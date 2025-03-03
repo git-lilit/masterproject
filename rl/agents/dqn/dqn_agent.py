@@ -2,25 +2,28 @@ import wandb
 import torch
 import collections
 import torch.optim as optim
-from lib.ReplayBuffer import ReplayBuffer
-from lib.training_utils import get_epsilon, soft_update
-from lib.SequenceModel import SequenceModel
+from lib.replay_buffer import ReplayBuffer
+from lib.sequence_model import SequenceModel
+from agents.dqn.utils import get_epsilon, soft_update, compute_true_q_values, compute_true_q_values_with_generated_actions
 import random
+from torch.nn.utils import clip_grad_norm_
 from torch import nn
+from statistics import mean
 
 
 class DQNAgent:
-    def __init__(self, model_params, test_fn, wandb_log, dataset, device):
+    def __init__(self, model_params, test_fn, wandb_log, dataset, full_dataset, device):
         self.model_params = model_params
         self.test_fn = test_fn
         self.wandb_log = wandb_log
         self.device = device
         self.dataset = dataset
+        self.full_dataset = full_dataset
 
         self.q = SequenceModel(**self.model_params, device=self.device)
+        
         self.q_target = SequenceModel(**self.model_params, device=self.device)
         self.q_target.load_state_dict(self.q.state_dict())
-
 
     def train(self, params):
         self.memory = ReplayBuffer(buffer_limit=int(params["buffer_size"]))
@@ -37,9 +40,10 @@ class DQNAgent:
             self.memory.put(X, y)
 
         for episode in range(params["n_episodes"]):
-            epsilon, loss, td_error = self.train_one_episode(episode, params)
+            epsilon = get_epsilon(episode, params)
+            loss, td_error, q_stats = self.train_step(params)
 
-            current_episode_stats = {
+            step_stats = {
                 "episode": episode,
                 "epsilon": epsilon,
                 "loss": loss,
@@ -47,60 +51,40 @@ class DQNAgent:
                 "buffer_size": self.memory.size(),
                 "max_score": self.memory.max_reward_score(),
             }
+            
+            step_stats.update(q_stats)
 
-            for key, value in current_episode_stats.items():
+            for key, value in step_stats.items():
                 all_episode_stats[key].append(value)
 
             soft_update(self.q_target, self.q, params["tau"])
 
             if episode % interval_length == 0:
                 seq_reward, max_q = self.evaluate(params, fixed_state_batch)
-                len(all_episode_stats["td_error"][-interval_length:])
 
-                mean_td_error_interval = (
-                    sum(all_episode_stats["td_error"][-interval_length:])
+                keys = list(step_stats.keys())
+
+                mean_losses = {
+                    key: sum(all_episode_stats[key][-interval_length:])
                     / interval_length
-                )
-                mean_loss_interval = (
-                    sum(all_episode_stats["loss"][-interval_length:]) / interval_length
-                )
+                    for key in keys
+                }
 
                 current_interval_stats = {
                     "seq_reward": seq_reward.item(),
-                    "max_q": max_q,
-                    "mean_td_error_interval": mean_td_error_interval,
-                    "mean_loss_interval": mean_loss_interval,
                 }
+
+                current_interval_stats.update(
+                    {f"mean_{key}": mean_losses[key] for key in keys}
+                )
 
                 for key, value in current_interval_stats.items():
                     all_interval_stats[key].append(value)
 
-                self.log_stats(current_episode_stats, current_interval_stats)
+                self.log_stats(step_stats, current_interval_stats)
 
         return all_episode_stats, all_interval_stats
-
-
-    def train_one_episode(self, episode, params):
-        """Performs training for one episode, including gradient updates."""
-        epsilon = get_epsilon(episode, params)
-
-        losses = []
-        td_errors = []
-
-        for _ in range(params["gradient_steps"]):
-            loss, td_error = self.train_step(params)
-
-            # Append values to lists
-            losses.append(loss)
-            td_errors.append(td_error)
-
-        # Compute mean loss and TD error
-        mean_loss = sum(losses) / len(losses)
-        mean_td_error = sum(td_errors) / len(td_errors)
-
-        return epsilon, mean_loss, mean_td_error
-
-
+    
     def train_step(self, params):
         """
         Perform a single training step for a DQN model on a GPU.
@@ -136,7 +120,8 @@ class DQNAgent:
 
         # Compute target Q-values with no gradient calculation
         with torch.no_grad():
-            max_q_s_prime = self.q_target(next_states).max(dim=1)[0]
+            estimated_q_next = self.q_target(next_states)
+            max_q_s_prime = estimated_q_next.max(dim=1)[0]
             target = rewards + params["gamma"] * max_q_s_prime * (1 - done_masks)
 
             # MC
@@ -146,21 +131,56 @@ class DQNAgent:
             # Max
             # target = rewards + params["gamma"] * torch.max(max_q_s_prime, total_rewards) * (1 - done_masks)
 
-        # Compute loss and TD error
-        loss = nn.functional.mse_loss(q_s_a, target)
         td_error = torch.abs(target.unsqueeze(1) - q_s_a).mean().item()
-
+        loss = nn.functional.mse_loss(q_s_a, target)
+        
+        # Conservative Q-Learning (CQL) Loss
         if params["loss_type"] == "cql":
             logsumexp_q = torch.logsumexp(q_out, dim=1)
-            cql_loss = params["cql_alpha"] * (logsumexp_q.mean() - q_s_a.mean())
-            loss += cql_loss
+            cql_loss = params["cql_alpha"] * (logsumexp_q - q_s_a).mean()
+            
+            loss = loss + cql_loss
+            loss.backward()
+            clip_grad_norm_(self.q.parameters(), 1.)
+            self.optimizer.step()
+        else:
+            # Perform backpropagation and optimizer step
+            loss.backward()
+            self.optimizer.step()
 
-        # Perform backpropagation and optimizer step
-        loss.backward()
-        self.optimizer.step()
+        # true_q_values_current = compute_true_q_values(
+        #     states=states,
+        #     actions=actions,
+        #     gamma=params["gamma"],
+        #     max_sequence_length=params["seq_len"],
+        #     full_dataset=self.full_dataset,
+        # )
+        
+        # in_distribution_mask = self.memory.check_in_distribution_with_generated_actions(
+        #     next_states, params["num_actions"], device=self.device
+        # )
+        
+        # true_q_values_next_actions = compute_true_q_values_with_generated_actions(
+        #     full_dataset=self.full_dataset,
+        #     states=next_states,
+        #     num_actions=params["num_actions"],
+        #     device=self.device,
+        #     gamma=params["gamma"],
+        #     max_sequence_length=params["seq_len"],
+        # )
+        
+        
+        # q_value_stats = {
+        #     "true_q": true_q_values_current.mean(),
+        #     "estimated_q": q_s_a.mean(),
+        #     "true_q_id": true_q_values_next_actions[in_distribution_mask].mean(),
+        #     "estimated_q_id": estimated_q_next[in_distribution_mask].mean(),
+        #     "true_q_ood": true_q_values_next_actions[~in_distribution_mask].mean(),
+        #     "estimated_q_ood": estimated_q_next[~in_distribution_mask].mean(),
+        # }
+        q_value_stats = {}
 
-        return loss.item(), td_error
-
+        return loss.item(), td_error, q_value_stats
 
     def log_stats(self, episode_stats, interval_stats):
         print(
@@ -173,15 +193,14 @@ class DQNAgent:
         )
 
         print(
-            f"Generated Sequence reward mean: {interval_stats["seq_reward"]:.3f} | Max Q: {interval_stats['max_q']:.3f} | "
-            f"Mean TD error: {interval_stats["mean_td_error_interval"]:.3f} | Mean Loss: {interval_stats["mean_loss_interval"]:.3f}"
+            f"Generated Sequence reward mean: {interval_stats["seq_reward"]:.3f}| "
+            f"Mean TD error: {interval_stats["mean_td_error"]:.3f} | Mean Loss: {interval_stats["mean_loss"]:.3f}"
         )
 
         all_stats = {**episode_stats, **interval_stats}
 
         if self.wandb_log == True:
             wandb.log(all_stats)
-
 
     def evaluate(self, params, fixed_state_batch):
         """Logs and evaluates the model's performance at regular intervals."""
@@ -192,7 +211,6 @@ class DQNAgent:
         rewards_mean = torch.mean(self.test_fn(state_batch))
 
         return rewards_mean, max_q
-
 
     def sample_sequences(self, epsilon, batch_size, params):
         """
@@ -240,12 +258,11 @@ class DQNAgent:
         generated_sequence = state_batch[:, 1:]
         return generated_sequence
 
-
     def create_fixed_batch(self, params):
         fixed_state_batch = self.sample_sequences(
             epsilon=0,  # Ensure full exploration if required
             batch_size=params["batch_size"],
-            params=params
+            params=params,
         )
 
         # Step 1: Generate random cut lengths
@@ -265,7 +282,6 @@ class DQNAgent:
         )
 
         return padded_sequences
-
 
     def interact_with_env(self, episode, params):
         epsilon = get_epsilon(episode, params)

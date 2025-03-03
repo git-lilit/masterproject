@@ -112,8 +112,6 @@ def get_saved_dataset():
     file_path_y = "data/tf_bind_8-y-0.npy"
 
     X = np.load(file_path_x)
-    print(X.shape)
     y = np.load(file_path_y)
 
     return X, y
-

@@ -6,3 +6,7 @@ uncertainty/saved_models
 uncertainty/predictions
 uncertainty/study_results
 __pycache__/
+rl/outputs
+rl/multirun
+rl/wandb
+run_data
