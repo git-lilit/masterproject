@@ -8,7 +8,7 @@ from torch.nn import functional as F
 from lib.replay_buffer import ReplayBuffer
 from agents.sac.utils import (
     sample_sequences_sac,
-    hard_update_target_network_ensemble,
+    hard_update_target_network,
     PolicyNetwork,
     CriticNetwork,
 )
@@ -79,7 +79,7 @@ class SACAgent:
                     all_episode_stats[key].append(value)
 
             if episode % params["hard_update_freq"] == 0:
-                hard_update_target_network_ensemble(
+                hard_update_target_network(
                     self.q_value_network1,
                     self.q_value_network2,
                     self.q_value_target_network1,
@@ -87,7 +87,7 @@ class SACAgent:
                 )
 
             if episode % interval_length == 0:
-                seq_reward = self.evaluate(params)
+                seq_reward, originality_score = self.evaluate(params)
 
                 keys = list(step_stats.keys())
 
@@ -99,6 +99,7 @@ class SACAgent:
 
                 current_interval_stats = {
                     "seq_reward": seq_reward.item(),
+                    "originality_score": originality_score
                 }
 
                 current_interval_stats.update(
@@ -131,6 +132,7 @@ class SACAgent:
         with torch.no_grad():
             _, next_probs = self.policy_network(next_states)
             next_log_probs = torch.log(next_probs)
+
             next_q1 = self.q_value_target_network1(next_states)
             next_q2 = self.q_value_target_network2(next_states)
             next_q = torch.min(next_q1, next_q2)
@@ -265,6 +267,7 @@ class SACAgent:
             greedy=True,
         )
 
+        originality_score = self.memory.originality_score(state_batch)
         rewards_mean = torch.mean(self.test_fn(state_batch))
 
-        return rewards_mean
+        return rewards_mean, originality_score

@@ -4,11 +4,20 @@ import collections
 import torch.optim as optim
 from lib.replay_buffer import ReplayBuffer
 from lib.sequence_model import SequenceModel
-from agents.dqn.utils import get_epsilon, soft_update, compute_true_q_values, compute_true_q_values_with_generated_actions
+from agents.dqn.utils import (
+    get_epsilon,
+    soft_update,
+    compute_true_q_values,
+    compute_true_q_values_with_generated_actions,
+)
 import random
 from torch.nn.utils import clip_grad_norm_
 from torch import nn
 from statistics import mean
+
+def count_parameters(model):
+    total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Total trainable parameters: {total_params}")
 
 
 class DQNAgent:
@@ -21,7 +30,8 @@ class DQNAgent:
         self.full_dataset = full_dataset
 
         self.q = SequenceModel(**self.model_params, device=self.device)
-        
+        count_parameters(self.q)
+
         self.q_target = SequenceModel(**self.model_params, device=self.device)
         self.q_target.load_state_dict(self.q.state_dict())
 
@@ -32,8 +42,6 @@ class DQNAgent:
         all_episode_stats = collections.defaultdict(list)
         all_interval_stats = collections.defaultdict(list)
         interval_length = params["print_interval"]
-
-        fixed_state_batch = self.create_fixed_batch(params)
 
         if params["training_mode"] == "offline":
             X, y = self.dataset
@@ -51,7 +59,7 @@ class DQNAgent:
                 "buffer_size": self.memory.size(),
                 "max_score": self.memory.max_reward_score(),
             }
-            
+
             step_stats.update(q_stats)
 
             for key, value in step_stats.items():
@@ -60,7 +68,7 @@ class DQNAgent:
             soft_update(self.q_target, self.q, params["tau"])
 
             if episode % interval_length == 0:
-                seq_reward, max_q = self.evaluate(params, fixed_state_batch)
+                seq_reward, originality_score = self.evaluate(params)
 
                 keys = list(step_stats.keys())
 
@@ -72,6 +80,7 @@ class DQNAgent:
 
                 current_interval_stats = {
                     "seq_reward": seq_reward.item(),
+                    "originality_score": originality_score,
                 }
 
                 current_interval_stats.update(
@@ -84,7 +93,7 @@ class DQNAgent:
                 self.log_stats(step_stats, current_interval_stats)
 
         return all_episode_stats, all_interval_stats
-    
+
     def train_step(self, params):
         """
         Perform a single training step for a DQN model on a GPU.
@@ -133,15 +142,15 @@ class DQNAgent:
 
         td_error = torch.abs(target.unsqueeze(1) - q_s_a).mean().item()
         loss = nn.functional.mse_loss(q_s_a, target)
-        
+
         # Conservative Q-Learning (CQL) Loss
         if params["loss_type"] == "cql":
             logsumexp_q = torch.logsumexp(q_out, dim=1)
             cql_loss = params["cql_alpha"] * (logsumexp_q - q_s_a).mean()
-            
+
             loss = loss + cql_loss
             loss.backward()
-            clip_grad_norm_(self.q.parameters(), 1.)
+            clip_grad_norm_(self.q.parameters(), 1.0)
             self.optimizer.step()
         else:
             # Perform backpropagation and optimizer step
@@ -155,11 +164,11 @@ class DQNAgent:
         #     max_sequence_length=params["seq_len"],
         #     full_dataset=self.full_dataset,
         # )
-        
+
         # in_distribution_mask = self.memory.check_in_distribution_with_generated_actions(
         #     next_states, params["num_actions"], device=self.device
         # )
-        
+
         # true_q_values_next_actions = compute_true_q_values_with_generated_actions(
         #     full_dataset=self.full_dataset,
         #     states=next_states,
@@ -168,8 +177,7 @@ class DQNAgent:
         #     gamma=params["gamma"],
         #     max_sequence_length=params["seq_len"],
         # )
-        
-        
+
         # q_value_stats = {
         #     "true_q": true_q_values_current.mean(),
         #     "estimated_q": q_s_a.mean(),
@@ -193,7 +201,7 @@ class DQNAgent:
         )
 
         print(
-            f"Generated Sequence reward mean: {interval_stats["seq_reward"]:.3f}| "
+            f"Generated Sequence reward mean: {interval_stats["seq_reward"]:.3f} | Originality Score: {interval_stats["originality_score"]:.3f} | "
             f"Mean TD error: {interval_stats["mean_td_error"]:.3f} | Mean Loss: {interval_stats["mean_loss"]:.3f}"
         )
 
@@ -202,17 +210,20 @@ class DQNAgent:
         if self.wandb_log == True:
             wandb.log(all_stats)
 
-    def evaluate(self, params, fixed_state_batch):
+    def evaluate(self, params):
         """Logs and evaluates the model's performance at regular intervals."""
         # Sample sequences for evaluation
-        state_batch = self.sample_sequences(epsilon=0, batch_size=1, params=params)
+        state_batch_max = self.sample_sequences(
+            epsilon=0, params=params
+        )
 
-        max_q = self.q(fixed_state_batch).max(dim=1)[0].mean().item()
-        rewards_mean = torch.mean(self.test_fn(state_batch))
+        max_rewards = torch.mean(self.test_fn(state_batch_max))
+        originality_score_max = self.memory.originality_score(state_batch_max)
 
-        return rewards_mean, max_q
+        return max_rewards, originality_score_max
 
-    def sample_sequences(self, epsilon, batch_size, params):
+
+    def sample_sequences(self, epsilon, params):
         """
         Samples sequences using the given Q-network.
 
@@ -233,6 +244,7 @@ class DQNAgent:
         start_token = params["num_actions"]
         seq_len = params["seq_len"]
         num_states = params["num_actions"]
+        batch_size = 1
 
         # Initialize the state batch with the start token
         state_batch = torch.full(

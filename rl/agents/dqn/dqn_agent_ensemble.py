@@ -3,6 +3,7 @@ import torch
 import collections
 import torch.optim as optim
 from lib.replay_buffer import ReplayBuffer
+from lib.replay_buffer_with_mask import ReplayBufferWithMask
 from lib.sequence_model import SequenceModel
 from agents.dqn.utils import (
     get_epsilon,
@@ -13,6 +14,11 @@ from agents.dqn.utils import (
 import random
 from torch import nn
 from statistics import mean
+from lib.sequence_model_with_prior import SequenceModelWithPrior
+
+def count_parameters(model, k):
+    total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Total trainable parameters: {total_params * k}")
 
 
 class DQNAgentEnsemble:
@@ -26,6 +32,9 @@ class DQNAgentEnsemble:
         n_networks,
         beta,
         integration_type,
+        bootstrapping,
+        diversification,
+        with_prior,
         device,
     ):
         self.model_params = model_params
@@ -37,23 +46,44 @@ class DQNAgentEnsemble:
         self.k = n_networks
         self.beta = beta
         self.integration_type = integration_type
+        self.bootstrapping = bootstrapping
+        self.diversification = diversification
 
-        self.qs = [
-            SequenceModel(**self.model_params, device=self.device)
-            for i in range(self.k)
-        ]
-        self.q_targets = [
-            SequenceModel(**self.model_params, device=self.device)
-            for i in range(self.k)
-        ]
+        if with_prior:
+            self.qs = [
+                SequenceModelWithPrior(**self.model_params, device=self.device)
+                for i in range(self.k)
+            ]
+            self.q_targets = [
+                SequenceModelWithPrior(**self.model_params, device=self.device)
+                for i in range(self.k)
+            ]
+        else:
+            self.qs = [
+                SequenceModel(**self.model_params, device=self.device)
+                for i in range(self.k)
+            ]
+            self.q_targets = [
+                SequenceModel(**self.model_params, device=self.device)
+                for i in range(self.k)
+            ]
 
         for i in range(self.k):
             q = self.qs[i]
             q_target = self.q_targets[i]
             q_target.load_state_dict(q.state_dict())
+            
+        count_parameters(q, self.k)
 
     def train(self, params):
-        self.memory = ReplayBuffer(buffer_limit=int(params["buffer_size"]))
+        if self.bootstrapping:
+            self.memory = ReplayBufferWithMask(
+                buffer_limit=int(params["buffer_size"]),
+                ensemble_size=self.k,
+                mask_prob=params["bernoulli_p"],
+            )
+        else:
+            self.memory = ReplayBuffer(buffer_limit=int(params["buffer_size"]))
         self.optimizers = [
             optim.Adam(self.qs[i].parameters(), lr=params["lr"]) for i in range(self.k)
         ]
@@ -92,7 +122,7 @@ class DQNAgentEnsemble:
             soft_update_k(self.q_targets, self.qs, params["tau"])
 
             if episode % interval_length == 0:
-                seq_reward, max_q = self.evaluate(params, None)
+                seq_reward, originality_score = self.evaluate(params)
 
                 keys = list(step_stats.keys())
 
@@ -104,6 +134,7 @@ class DQNAgentEnsemble:
 
                 current_interval_stats = {
                     "seq_reward": seq_reward.item(),
+                    "originality_score": originality_score,
                 }
 
                 current_interval_stats.update(
@@ -127,7 +158,14 @@ class DQNAgentEnsemble:
         transitions = self.memory.sample_steps(
             params["batch_size"], params["fraction_best"]
         )
-        states, actions, rewards, next_states, done_masks, total_rewards = transitions
+        if self.bootstrapping:
+            states, actions, rewards, next_states, done_masks, total_rewards, masks = (
+                transitions
+            )
+        else:
+            states, actions, rewards, next_states, done_masks, total_rewards = (
+                transitions
+            )
 
         # Move all data to the specified device
         states = states.long().to(device)
@@ -137,8 +175,22 @@ class DQNAgentEnsemble:
         done_masks = done_masks.to(device)
         total_rewards = total_rewards.to(device)
 
+        if self.bootstrapping:
+            masks = masks.to(device)
+
         losses = []
         td_errors = []
+
+        if self.diversification:
+            q_values = torch.stack(
+                [q(states) for q in self.qs]
+            )  # Shape: (N, batch_size, num_actions)
+            mean_q = q_values.mean(dim=0)  # Shape: (batch_size, num_actions)
+            mean_action = torch.gather(
+                mean_q, dim=1, index=actions.long().reshape(-1, 1)
+            ).squeeze(1)
+
+            mean_action = mean_action.detach()
 
         for i in range(self.k):
             q = self.qs[i]
@@ -164,8 +216,18 @@ class DQNAgentEnsemble:
                 target = rewards + params["gamma"] * max_q_s_prime * (1 - done_masks)
 
             # Compute loss and TD error
-            loss = nn.functional.mse_loss(q_s_a, target)
-            td_error = torch.abs(target.unsqueeze(1) - q_s_a).mean()
+            if self.bootstrapping:
+                current_mask = masks[:, i]
+                loss = ((q_s_a - target) ** 2 * current_mask).mean()
+                td_error = torch.abs(
+                    (target.unsqueeze(1) - q_s_a) * current_mask
+                ).mean()
+            else:
+                loss = nn.functional.mse_loss(q_s_a, target)
+                td_error = torch.abs(target.unsqueeze(1) - q_s_a).mean()
+
+            if self.diversification:
+                loss -= params["eta"] * ((mean_action - q_s_a) ** 2).mean()
 
             # Perform backpropagation and optimizer step
             loss.backward()
@@ -177,6 +239,7 @@ class DQNAgentEnsemble:
         return mean(losses), mean(td_errors), {}
 
     def train_step_rem(self, params):
+        print("hereeeeeeee")
         device = self.device
         transitions = self.memory.sample_steps(
             params["batch_size"], params["fraction_best"]
@@ -197,26 +260,21 @@ class DQNAgentEnsemble:
         q_values = torch.stack(
             [q(states) for q in self.qs]
         )  # Shape: (K, batch_size, action_dim)
-        q_s_a = torch.gather(
-            q_values,
-            dim=2,
-            index=actions.long().reshape(1, -1, 1).expand(self.k, -1, 1),
-        ).squeeze(2)
-        q_alpha_s_a = torch.sum(
-            alphas.view(-1, 1) * q_s_a, dim=0
-        )  # Shape: (batch_size,)
+        q_alpha_s_a = (alphas.view(-1, 1, 1) * q_values).sum(dim=0)  # Sum over K
+        q_alpha_s_a = q_alpha_s_a.max(dim=1)[0] # Then take max over actions
+        
+        print(q_alpha_s_a.shape)
 
+        # TODO Fix This
         with torch.no_grad():
             # Compute convex combination of target Q-values
             q_targets_values = torch.stack(
                 [q_target(next_states) for q_target in self.q_targets]
             )  # (K, batch, action_dim)
-            max_q_targets = q_targets_values.max(dim=2)[
-                0
-            ]  # max over actions, shape: (K, batch)
-            q_alpha_s_prime = torch.sum(
-                alphas.view(-1, 1) * max_q_targets, dim=0
-            )  # (batch,)
+            q_alpha_s_prime = (alphas.view(-1, 1, 1) * q_targets_values).sum(
+                dim=0
+            )  # Sum over K
+            q_alpha_s_prime = q_alpha_s_prime.max(dim=1)[0]
 
             # Compute target
             target = rewards + params["gamma"] * q_alpha_s_prime * (1 - done_masks)
@@ -248,7 +306,7 @@ class DQNAgentEnsemble:
         )
 
         print(
-            f"Generated Sequence reward mean: {interval_stats["seq_reward"]:.3f}| "
+            f"Generated Sequence reward mean: {interval_stats["seq_reward"]:.3f} | Originality Score: {interval_stats["originality_score"]:.3f} | "
             f"Mean TD error: {interval_stats["mean_td_error"]:.3f} | Mean Loss: {interval_stats["mean_loss"]:.3f}"
         )
 
@@ -257,14 +315,15 @@ class DQNAgentEnsemble:
         if self.wandb_log == True:
             wandb.log(all_stats)
 
-    def evaluate(self, params, fixed_state_batch):
+    def evaluate(self, params):
         """Logs and evaluates the model's performance at regular intervals."""
         # Sample sequences for evaluation
-        state_batch = self.sample_sequences(epsilon=0, batch_size=1, params=params)
+        state_batch_max = self.sample_sequences(epsilon=0, params=params)
 
-        rewards_mean = torch.mean(self.test_fn(state_batch))
+        max_rewards = torch.mean(self.test_fn(state_batch_max))
+        originality_score_max = self.memory.originality_score(state_batch_max)
 
-        return rewards_mean, 0
+        return max_rewards, originality_score_max
 
     def sample_alphas(self, K, device="cpu"):
         """
@@ -281,14 +340,13 @@ class DQNAgentEnsemble:
         alpha = alpha_unnormalized / alpha_unnormalized.sum()  # normalize
         return alpha
 
-    def sample_sequences(self, epsilon, batch_size, params):
+    def sample_sequences(self, epsilon, params):
         """
         Samples sequences using the given Q-network.
 
         Args:
             q (nn.Module): The Q-network model.
             epsilon (float): Epsilon value for epsilon-greedy policy.
-            batch_size (int): Number of sequences to sample.
             start_token (int): Starting token for the sequences.
             seq_len (int): Length of each sequence.
             num_states (int): Number of possible states (vocabulary size).
@@ -301,6 +359,7 @@ class DQNAgentEnsemble:
         start_token = params["num_actions"]
         seq_len = params["seq_len"]
         num_states = params["num_actions"]
+        batch_size = 1
 
         # Initialize the state batch with the start token
         state_batch = torch.full(

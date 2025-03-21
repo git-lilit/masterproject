@@ -8,7 +8,7 @@ from lib.sequence_model import SequenceModel
 
 class PolicyNetwork(SequenceModel):
     def __init__(
-        self, vocab_size, embedding_dim, num_heads, output_dim, seq_len, device="cpu"
+        self, vocab_size, embedding_dim, num_heads, output_dim, seq_len, prior_scale=0, device="cpu"
     ):
         super(PolicyNetwork, self).__init__(
             vocab_size, embedding_dim, num_heads, output_dim, seq_len, device
@@ -90,7 +90,7 @@ def sample_sequences_sac(
     return state_batch[:, 1:]
 
 
-def hard_update_target_network_ensemble(
+def hard_update_target_network(
     q_value_network1, q_value_network2, q_value_target_network1, q_value_target_network2
 ):
     """
@@ -105,6 +105,10 @@ def hard_update_target_network_ensemble(
     q_value_target_network2.load_state_dict(q_value_network2.state_dict())
     q_value_target_network2.eval()
 
+def hard_update_target_network_ensemble(q_value_networks, q_value_target_networks):
+    for q_net, q_target in zip(q_value_networks, q_value_target_networks):
+            q_target.load_state_dict(q_net.state_dict())
+            q_target.eval()
 
 # def compute_true_q_values(
 #     actor, states, actions, reward_fn, gamma=0.99, max_sequence_length=8

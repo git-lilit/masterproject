@@ -6,19 +6,23 @@ import torch.nn.functional as F
 from lib.dataset_splits import get_saved_dataset, PercentileSplit
 
 
-class ReplayBuffer:
-    def __init__(self, buffer_limit):
+class ReplayBufferWithMask:
+    def __init__(self, buffer_limit, ensemble_size, mask_prob):
         self.buffer = collections.deque(maxlen=buffer_limit)
+        self.ensemble_size = ensemble_size
+        self.mask_prob = mask_prob
 
     def put(self, sequences, rewards):
         sequences_list = sequences.tolist()
         rewards_list = rewards.tolist()
 
         for sequence, reward in zip(sequences_list, rewards_list):
+            mask = torch.bernoulli(torch.full((self.ensemble_size,), self.mask_prob))
             self.buffer.append(
                 (
                     torch.tensor(sequence, dtype=torch.float),
                     torch.tensor(reward, dtype=torch.float),
+                    mask,
                 )
             )
 
@@ -34,33 +38,35 @@ class ReplayBuffer:
 
         sampled_indices = np.random.choice(len(self.buffer), size=n, p=probabilities)
         mini_batch = [self.buffer[idx] for idx in sampled_indices]
-        final_sequence_lst, total_reward_lst = zip(*mini_batch)
+        final_sequence_list, total_reward_list, mask_list = zip(*mini_batch)
 
         return (
-            torch.stack(final_sequence_lst),
-            torch.stack(total_reward_lst),
+            torch.stack(final_sequence_list),
+            torch.stack(total_reward_list),
+            torch.stack(mask_list),
         )
 
     def sample_episodes_randomly(self, n):
         sampled_indices = np.random.choice(len(self.buffer), size=n, replace=True)
         mini_batch = [self.buffer[idx] for idx in sampled_indices]
-        final_sequence_lst, total_reward_lst = zip(*mini_batch)
+        final_sequence_list, total_reward_list, mask_list = zip(*mini_batch)
 
         return (
-            torch.stack(final_sequence_lst),
-            torch.stack(total_reward_lst),
+            torch.stack(final_sequence_list),
+            torch.stack(total_reward_list),
+            torch.stack(mask_list),
         )
 
     def sample_steps(self, n, fraction_best):
         n_samples_random = int((1 - fraction_best) * n)
         # Sample random and best episodes
         if fraction_best != 1:
-            final_sequences, total_rewards = self.sample_episodes_randomly(
+            final_sequences, total_rewards, masks = self.sample_episodes_randomly(
                 n_samples_random
             )
         if fraction_best > 0 and fraction_best != 1:
-            best_final_sequences, best_total_rewards = self.sample_episodes_priority(
-                n - n_samples_random
+            best_final_sequences, best_total_rewards, best_masks = (
+                self.sample_episodes_priority(n - n_samples_random)
             )
 
             # Concatenate the random and best sequences and rewards
@@ -68,8 +74,9 @@ class ReplayBuffer:
             total_rewards = torch.cat(
                 [total_rewards, best_total_rewards], dim=0
             ).squeeze(1)
+            masks = torch.cat([masks, best_masks], dim=0)
         if fraction_best == 1:
-            final_sequences, total_rewards = self.sample_episodes_priority(n)
+            final_sequences, total_rewards, masks = self.sample_episodes_priority(n)
 
         seq_len = final_sequences.shape[1]
 
@@ -91,7 +98,7 @@ class ReplayBuffer:
             rewards = torch.zeros((n,))
             done_masks = torch.zeros((n,))
 
-        return states, actions, rewards, next_states, done_masks, total_rewards
+        return states, actions, rewards, next_states, done_masks, total_rewards, masks
 
     def size(self):
         return len(self.buffer)
@@ -110,7 +117,7 @@ class ReplayBuffer:
         Creates a prefix dictionary for efficient prefix-based lookups.
         """
         self.prefix_dict = {}
-        for sequence, reward in self.buffer:
+        for sequence, reward, _ in self.buffer:
             sequence = sequence.int().tolist()
             for i in range(1, len(sequence) + 1):
                 prefix = tuple(sequence[:i])
@@ -181,7 +188,7 @@ class ReplayBuffer:
                 in_distribution[j, i] = self.prefix_dict.get(prefix, False)
 
         return in_distribution
-
+    
     def originality_score(self, query_sequences):
         """
         Computes the originality score for the final sequence in the batch.
@@ -200,3 +207,4 @@ class ReplayBuffer:
         number_of_seen = sum(seq in self.prefix_dict for seq in batch_tuples)
 
         return (batch_size - number_of_seen) / batch_size
+

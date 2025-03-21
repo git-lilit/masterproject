@@ -43,7 +43,7 @@ class BCAgent:
                 all_episode_stats[key].append(value)
 
             if episode % interval_length == 0:
-                seq_reward = self.evaluate(params)
+                seq_reward, originality_score = self.evaluate(params)
 
                 mean_loss_interval = (
                     sum(all_episode_stats["loss"][-interval_length:]) / interval_length
@@ -51,6 +51,7 @@ class BCAgent:
 
                 current_interval_stats = {
                     "seq_reward": seq_reward.item(),
+                    "originality_score": originality_score,
                     "mean_loss_interval": mean_loss_interval,
                 }
 
@@ -86,9 +87,10 @@ class BCAgent:
         # Sample sequences for evaluation
         state_batch = self.sample_sequences(batch_size=1, params=params)
 
-        rewards_mean = torch.mean(self.test_fn(state_batch))
+        max_rewards = torch.mean(self.test_fn(state_batch))
+        originality_score_max = self.memory.originality_score(state_batch)
 
-        return rewards_mean
+        return max_rewards, originality_score_max
 
     def train_step(self, params):
         """
