@@ -1,3 +1,9 @@
+/home/ghandill/miniconda3/envs/rl/bin/python /home/ghandill/masterproject_lilit_ghandilyan/rl/main.py \
+    -m seed=1\
+    agent_type=ensemble \
+    integration_type=var \
+    group_name=random_runs_correlation_trials;
+
 # /home/ghandill/miniconda3/envs/rl/bin/python /home/ghandill/masterproject_lilit_ghandilyan/rl/main.py \
 #     -m seed=1,2,3,4,5,6,7,8,9,10\
 #     agent_type=dsac \
@@ -44,13 +50,7 @@
 #     group_name=random_runs_dsac_seeds_prior;
 
 
-/home/ghandill/miniconda3/envs/rl/bin/python /home/ghandill/masterproject_lilit_ghandilyan/rl/main.py \
-    -m seed=1,2,3,4,5,6,7,8,9,10\
-    agent_type=sac_ensemble \
-    integration_type=var \
-    embedding_dim=48 \
-    num_heads=4 \
-    group_name=random_runs_dsac_seeds_small;
+
 
 # /home/ghandill/miniconda3/envs/rl/bin/python /home/ghandill/masterproject_lilit_ghandilyan/rl/main.py \
 #     -m seed=1,2,3,4,5,6,7,8,9,10\

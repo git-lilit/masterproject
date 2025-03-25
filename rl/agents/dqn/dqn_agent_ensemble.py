@@ -10,11 +10,14 @@ from agents.dqn.utils import (
     soft_update_k,
     compute_true_q_values,
     compute_true_q_values_with_generated_actions,
+    create_prefix_dict
 )
 import random
 from torch import nn
 from statistics import mean
 from lib.sequence_model_with_prior import SequenceModelWithPrior
+from torchmetrics.functional import pearson_corrcoef
+
 
 def count_parameters(model, k):
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -72,7 +75,7 @@ class DQNAgentEnsemble:
             q = self.qs[i]
             q_target = self.q_targets[i]
             q_target.load_state_dict(q.state_dict())
-            
+
         count_parameters(q, self.k)
 
     def train(self, params):
@@ -122,7 +125,7 @@ class DQNAgentEnsemble:
             soft_update_k(self.q_targets, self.qs, params["tau"])
 
             if episode % interval_length == 0:
-                seq_reward, originality_score = self.evaluate(params)
+                seq_reward, originality_score, mean_correlation = self.evaluate(params)
 
                 keys = list(step_stats.keys())
 
@@ -135,6 +138,7 @@ class DQNAgentEnsemble:
                 current_interval_stats = {
                     "seq_reward": seq_reward.item(),
                     "originality_score": originality_score,
+                    "mean_correlation": mean_correlation
                 }
 
                 current_interval_stats.update(
@@ -261,8 +265,8 @@ class DQNAgentEnsemble:
             [q(states) for q in self.qs]
         )  # Shape: (K, batch_size, action_dim)
         q_alpha_s_a = (alphas.view(-1, 1, 1) * q_values).sum(dim=0)  # Sum over K
-        q_alpha_s_a = q_alpha_s_a.max(dim=1)[0] # Then take max over actions
-        
+        q_alpha_s_a = q_alpha_s_a.max(dim=1)[0]  # Then take max over actions
+
         print(q_alpha_s_a.shape)
 
         # TODO Fix This
@@ -318,12 +322,12 @@ class DQNAgentEnsemble:
     def evaluate(self, params):
         """Logs and evaluates the model's performance at regular intervals."""
         # Sample sequences for evaluation
-        state_batch_max = self.sample_sequences(epsilon=0, params=params)
+        state_batch_max, mean_correlation = self.sample_sequences(epsilon=0, params=params)
 
         max_rewards = torch.mean(self.test_fn(state_batch_max))
         originality_score_max = self.memory.originality_score(state_batch_max)
 
-        return max_rewards, originality_score_max
+        return max_rewards, originality_score_max, mean_correlation
 
     def sample_alphas(self, K, device="cpu"):
         """
@@ -360,12 +364,15 @@ class DQNAgentEnsemble:
         seq_len = params["seq_len"]
         num_states = params["num_actions"]
         batch_size = 1
+        
+        prefix_dict = create_prefix_dict(self.full_dataset)
 
         # Initialize the state batch with the start token
         state_batch = torch.full(
             (batch_size, 1), start_token, dtype=torch.long, device=self.device
         )
 
+        correlations = []
         for _ in range(seq_len):
             if random.random() < epsilon:
                 # Random action sampling (exploration)
@@ -384,21 +391,34 @@ class DQNAgentEnsemble:
                             mean_qs = torch.mean(q_values_stack, dim=0)
                             std_qs = torch.std(q_values_stack, dim=0)
                             final_q_estimate = mean_qs - self.beta * std_qs
-                        case "rem":
-                            final_q_estimate = q_values_stack.mean(dim=0)
                         case _:
                             raise ValueError(
                                 "Integration type should be one of min, var, rem"
                             )
+                            
 
                     actions = torch.argmax(final_q_estimate, dim=1).unsqueeze(1)
+
+                    true_q_values = compute_true_q_values(
+                        prefix_dict, 
+                        states=state_batch,
+                        gamma=params["gamma"]
+                    )
+
+                    estimation_error = mean_qs - true_q_values
+                    uncertainty_estimate = std_qs
+
+                    correlation = pearson_corrcoef(
+                        estimation_error, uncertainty_estimate
+                    )
+                    correlations.append(correlation)
 
             # Append actions to the state batch
             state_batch = torch.cat((state_batch, actions), dim=1)
 
         # Return generated sequences, excluding the start token
         generated_sequence = state_batch[:, 1:]
-        return generated_sequence
+        return generated_sequence, sum(correlations) / len(correlations)
 
     def create_fixed_batch(self, params):
         fixed_state_batch = self.sample_sequences(

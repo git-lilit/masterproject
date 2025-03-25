@@ -7,8 +7,8 @@ from lib.utils import set_seed, initialize_device, compute_auc, TFBindChecker
 from lib.dataset_splits import get_saved_dataset, PercentileSplit
 from agents.bc.bc_agent import BCAgent
 from agents.dqn.dqn_agent import DQNAgent
-from agents.dqn.dqn_agent_ensemble import DQNAgentEnsemble
 from agents.sac.sac_agent import SACAgent
+from agents.dqn.dqn_agent_ensemble import DQNAgentEnsemble
 from agents.sac.sac_agent_ensemble import SACAgentEnsemble
 
 
