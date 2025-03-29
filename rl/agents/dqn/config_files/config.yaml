@@ -19,17 +19,15 @@ lr: 0.00095
 # cql_alpha: 0.00246
 cql_alpha: 0.5
 
-beta: 0.2
 bernoulli_p: 0.5
-eta: 0.1
 prior_scale: 1
 
 # agent_type should be from (bc, dqn, dsac, ensemble)
 # integration type should be from (var, min, rem)
-agent_type: dqn
+agent_type: ensemble
 integration_type: var
 bootstrapping: false
-diversification: false
+diversification: true
 with_prior: false
 n_members: 5
 
@@ -41,4 +39,8 @@ group_name: dqn_seeds
 
 upper_percentile: 100
 sample_fraction: 0.05
-n_episodes: 25000
+n_episodes: 15000
+
+beta: 0
+eta: 0.9
+theta: 1

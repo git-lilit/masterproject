@@ -212,8 +212,8 @@ class SACAgentEnsemble:
                 q_loss = F.mse_loss(q_value, target_q)
 
             if self.diversification:
-                q_loss -= params["eta"] * ((mean_action - q_value) ** 2).mean()
-
+                q_loss -= params["eta"] * torch.exp(-params["theta"] * torch.abs(mean_action - q_value)).mean()
+                
             optimizer.zero_grad()
             q_loss.backward()
             optimizer.step()

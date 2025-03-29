@@ -48,13 +48,15 @@ def create_prefix_dict(full_dataset):
     x, y = full_dataset
 
     for sequence, reward in zip(x, y):
-        sequence = sequence.int().tolist()
+        sequence = sequence.tolist()
         for i in range(1, len(sequence) + 1):
-            prefix = tuple(sequence[:i])
+            prefix = "".join(map(str, sequence[:i]))
             if prefix not in prefix_dict:
                 prefix_dict[prefix] = reward
             else:
                 prefix_dict[prefix] = max(reward, prefix_dict[prefix])
+                
+    return prefix_dict
 
 
 def compute_true_q_values(
@@ -75,27 +77,18 @@ def compute_true_q_values(
     """
     batch_size = states.shape[0]
 
-    # Expand states to shape [B, A, S] by repeating each state for all actions
-    expanded_states = states.unsqueeze(1).repeat(1, num_actions, 1)  # [B, A, S]
-
-    # Create an action tensor of shape [B, A, 1] with values from 0 to num_actions-1
-    actions = torch.arange(num_actions, dtype=states.dtype, device=states.device)
-    actions = actions.unsqueeze(0).expand(batch_size, -1).unsqueeze(-1)  # [B, A, 1]
-
-    # Concatenate states with actions to form sequences of shape [B, A, S+1]
-    sequences = torch.cat((expanded_states, actions), dim=-1).cpu().numpy()
-
     q_values = np.zeros((batch_size, num_actions))  # Placeholder for Q-values
-
+    
     for i in range(batch_size):
         for j in range(num_actions):
-            seq = tuple(sequences[i, j])  # Convert to tuple for dictionary lookup
+            next_state = states[i].tolist() + [j]
+            next_state_string = "".join(map(str, next_state))
+            
             best_score = prefix_dict.get(
-                seq, 0
-            )  # Use prefix dictionary for fast lookup
-
+                next_state_string[1:], 0
+            )
             q_values[i, j] = best_score
-
+    
     return torch.tensor(
         q_values, dtype=torch.float32, device=states.device
-    )  # Shape [B, A]
+    )

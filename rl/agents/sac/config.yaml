@@ -54,9 +54,10 @@ lr: 0.00095
 hard_update_freq: 1000
 n_members: 5
 bernoulli_p: 0.9
-beta: 0.2
+beta: 0.1
 prior_scale: 0.8
-eta: 0.01
+eta: 0.9
+theta: 1
 
 # if true, simulate a failure by raising an exception
 error: false
@@ -67,7 +68,7 @@ integration_type: var
 
 bootstrapping: false
 with_prior: false
-diversification: false
+diversification: true
 
 n_episodes: 15000
 group_name: sac_ensemble_trials

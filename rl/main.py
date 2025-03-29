@@ -12,7 +12,7 @@ from agents.dqn.dqn_agent_ensemble import DQNAgentEnsemble
 from agents.sac.sac_agent_ensemble import SACAgentEnsemble
 
 
-@hydra.main(version_base=None, config_path="agents/sac", config_name="config")
+@hydra.main(version_base=None, config_path="agents/dqn/config_files", config_name="config")
 def main(config: DictConfig):
     wandb_log = True
 
@@ -64,7 +64,7 @@ def main(config: DictConfig):
         wandb.init(
             project="dqn",
             config={**model_params, **train_params, **config},
-            name=f"dsac_run_{config['agent_type']}_{config[var_to_include]:.3f}",
+            name=f"new_diversity_runs_{config["theta"]}",
             group=f"{config["group_name"]}",
             reinit=True,
         )

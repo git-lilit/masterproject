@@ -13,7 +13,9 @@ runs = api.runs(f"{entity}/{project}")
 
 
 def perform_t_test(group_1, group_2):
-    t_stat, p_value = stats.ttest_ind(group_1, group_2, equal_var=False)
+    # t_stat, p_value = stats.ttest_ind(group_1, group_2, equal_var=False)
+
+    t_stat, p_value = stats.ttest_rel(group_1, group_2)
 
     if p_value < 0.001:
         significance = "***"

@@ -9,7 +9,6 @@ from agents.dqn.utils import (
     get_epsilon,
     soft_update_k,
     compute_true_q_values,
-    compute_true_q_values_with_generated_actions,
     create_prefix_dict
 )
 import random
@@ -138,9 +137,9 @@ class DQNAgentEnsemble:
                 current_interval_stats = {
                     "seq_reward": seq_reward.item(),
                     "originality_score": originality_score,
-                    "mean_correlation": mean_correlation
+                    "mean_correlation": mean_correlation.item()
                 }
-
+                
                 current_interval_stats.update(
                     {f"mean_{key}": mean_losses[key] for key in keys}
                 )
@@ -231,7 +230,8 @@ class DQNAgentEnsemble:
                 td_error = torch.abs(target.unsqueeze(1) - q_s_a).mean()
 
             if self.diversification:
-                loss -= params["eta"] * ((mean_action - q_s_a) ** 2).mean()
+                # loss -= params["eta"] * ((mean_action - q_s_a) ** 2).mean()
+                loss -= params["eta"] * torch.exp(-params["theta"] * torch.abs(mean_action - q_s_a)).mean()
 
             # Perform backpropagation and optimizer step
             loss.backward()
@@ -241,63 +241,6 @@ class DQNAgentEnsemble:
             td_errors.append(td_error.item())
 
         return mean(losses), mean(td_errors), {}
-
-    def train_step_rem(self, params):
-        print("hereeeeeeee")
-        device = self.device
-        transitions = self.memory.sample_steps(
-            params["batch_size"], params["fraction_best"]
-        )
-        states, actions, rewards, next_states, done_masks, total_rewards = transitions
-
-        # Move all data to the specified device
-        states = states.long().to(device)
-        actions = actions.to(device)
-        rewards = rewards.to(device)
-        next_states = next_states.long().to(device)
-        done_masks = done_masks.to(device)
-        total_rewards = total_rewards.to(device)
-
-        alphas = self.sample_alphas(self.k, self.device)
-
-        # Compute convex combination of Q-values for the current state-action pair
-        q_values = torch.stack(
-            [q(states) for q in self.qs]
-        )  # Shape: (K, batch_size, action_dim)
-        q_alpha_s_a = (alphas.view(-1, 1, 1) * q_values).sum(dim=0)  # Sum over K
-        q_alpha_s_a = q_alpha_s_a.max(dim=1)[0]  # Then take max over actions
-
-        print(q_alpha_s_a.shape)
-
-        # TODO Fix This
-        with torch.no_grad():
-            # Compute convex combination of target Q-values
-            q_targets_values = torch.stack(
-                [q_target(next_states) for q_target in self.q_targets]
-            )  # (K, batch, action_dim)
-            q_alpha_s_prime = (alphas.view(-1, 1, 1) * q_targets_values).sum(
-                dim=0
-            )  # Sum over K
-            q_alpha_s_prime = q_alpha_s_prime.max(dim=1)[0]
-
-            # Compute target
-            target = rewards + params["gamma"] * q_alpha_s_prime * (1 - done_masks)
-
-        # Compute loss
-        loss = nn.functional.mse_loss(q_alpha_s_a, target)
-        td_error = torch.abs(target - q_alpha_s_a).mean()
-
-        # Perform backpropagation and optimization step
-        for i in range(self.k):
-            optimizer = self.optimizers[i]
-            optimizer.zero_grad()
-
-        loss.backward()
-
-        for i in range(self.k):
-            self.optimizers[i].step()
-
-        return loss.item(), td_error.item(), {}
 
     def log_stats(self, episode_stats, interval_stats):
         print(
@@ -328,21 +271,6 @@ class DQNAgentEnsemble:
         originality_score_max = self.memory.originality_score(state_batch_max)
 
         return max_rewards, originality_score_max, mean_correlation
-
-    def sample_alphas(self, K, device="cpu"):
-        """
-        Samples a random point alpha in the K-simplex, i.e., alpha >= 0 and sum(alpha)=1.
-
-        Steps:
-        1. Draw K values i.i.d. from Uniform(0,1).
-        2. Normalize by dividing by the sum.
-
-        Returns:
-        alpha: (K,) tensor with non-negative entries summing to 1.
-        """
-        alpha_unnormalized = torch.rand(K, device=device)  # [K] from Uniform(0,1)
-        alpha = alpha_unnormalized / alpha_unnormalized.sum()  # normalize
-        return alpha
 
     def sample_sequences(self, epsilon, params):
         """
@@ -395,7 +323,6 @@ class DQNAgentEnsemble:
                             raise ValueError(
                                 "Integration type should be one of min, var, rem"
                             )
-                            
 
                     actions = torch.argmax(final_q_estimate, dim=1).unsqueeze(1)
 
@@ -405,20 +332,23 @@ class DQNAgentEnsemble:
                         gamma=params["gamma"]
                     )
 
-                    estimation_error = mean_qs - true_q_values
-                    uncertainty_estimate = std_qs
-
+                    estimation_error = abs(mean_qs - true_q_values)[0]
+                    uncertainty_estimate = std_qs[0]
+                    
                     correlation = pearson_corrcoef(
                         estimation_error, uncertainty_estimate
                     )
-                    correlations.append(correlation)
+                    if not torch.isnan(correlation).any():
+                        correlations.append(correlation)
 
             # Append actions to the state batch
             state_batch = torch.cat((state_batch, actions), dim=1)
 
         # Return generated sequences, excluding the start token
         generated_sequence = state_batch[:, 1:]
-        return generated_sequence, sum(correlations) / len(correlations)
+        avg_correlation = sum(correlations) / len(correlations) if len(correlations) > 0 else torch.tensor(0)
+
+        return generated_sequence, avg_correlation
 
     def create_fixed_batch(self, params):
         fixed_state_batch = self.sample_sequences(
