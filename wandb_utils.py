@@ -12,10 +12,11 @@ project = "dqn"
 runs = api.runs(f"{entity}/{project}")
 
 
-def perform_t_test(group_1, group_2):
-    # t_stat, p_value = stats.ttest_ind(group_1, group_2, equal_var=False)
-
-    t_stat, p_value = stats.ttest_rel(group_1, group_2)
+def perform_t_test(group_1, group_2, paired=True):
+    if paired:
+        t_stat, p_value = stats.ttest_rel(group_1, group_2)
+    else: 
+        t_stat, p_value = stats.ttest_ind(group_1, group_2, equal_var=False)
 
     if p_value < 0.001:
         significance = "***"
@@ -63,7 +64,7 @@ def find_best_run(group_name, n_included_runs, n_finish):
 
 
 def calculate_mean_values(
-    group_names, n_included_runs, n_finish=None, originality=False, baseline_idx=None
+    group_names, n_included_runs, n_finish=None, originality=False, baseline_idx=None, paired=True
 ):
     # Fetch all runs in the project
     all_data = []
@@ -104,7 +105,7 @@ def calculate_mean_values(
     for data in all_data:
         group_1 = all_data[baseline_idx]["Mean Scores"]
         group_2 = data["Mean Scores"]
-        data["P value"], data["T stat"], data["Significance"] = perform_t_test(group_1, group_2)
+        data["P value"], data["T stat"], data["Significance"] = perform_t_test(group_1, group_2, paired)
 
     # Create DataFrame
     df = pd.DataFrame(all_data)

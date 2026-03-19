@@ -24,7 +24,7 @@ prior_scale: 1
 
 # agent_type should be from (bc, dqn, dsac, ensemble)
 # integration type should be from (var, min, rem)
-agent_type: ensemble
+agent_type: cql
 integration_type: var
 bootstrapping: false
 diversification: true

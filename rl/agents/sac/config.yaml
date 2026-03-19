@@ -54,7 +54,6 @@ lr: 0.00095
 hard_update_freq: 1000
 n_members: 5
 bernoulli_p: 0.9
-beta: 0.1
 prior_scale: 0.8
 eta: 0.9
 theta: 1
@@ -68,9 +67,10 @@ integration_type: var
 
 bootstrapping: false
 with_prior: false
-diversification: true
+diversification: false
 
 n_episodes: 15000
 group_name: sac_ensemble_trials
 upper_percentile: 100
 sample_fraction: 0.05
+beta: 0

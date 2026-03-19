@@ -35,7 +35,7 @@ class CriticNetwork(SequenceModel):
 
 
 def sample_sequences_sac(
-    actor,
+    actors,
     batch_size,
     start_token,
     seq_len,
@@ -60,18 +60,21 @@ def sample_sequences_sac(
     Returns:
         torch.Tensor: Generated sequences of shape (batch_size, seq_len).
     """
-    actor = actor.to(device)
     state_batch = torch.full(
         (batch_size, 1), start_token, dtype=torch.long, device=device
     )
 
     for _ in range(seq_len):
         with torch.no_grad():
-            logits, probs = actor(state_batch)  # Shape: (batch_size, num_actions)
-
-            # Apply temperature scaling
-            scaled_logits = logits / temperature
-            probs = F.softmax(scaled_logits, dim=-1)  # Shape: (batch_size, num_actions)
+            probs_list = []
+            for actor in actors: 
+                logits = actor(state_batch)[0]
+                scaled_logits = logits / temperature
+                probs = F.softmax(scaled_logits, dim=-1)  # Shape: (batch_size, num_actions)
+                probs_list.append(probs)
+            
+            # Stack along a new dimension (e.g., dim=0) and compute the mean
+            probs = torch.stack(probs_list, dim=0).mean(dim=0)  # Shape: (batch_size, num_actions)
 
             # Apply top-k filtering if specified
             if top_k is not None:

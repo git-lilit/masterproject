@@ -231,7 +231,7 @@ class DQNAgentEnsemble:
 
             if self.diversification:
                 # loss -= params["eta"] * ((mean_action - q_s_a) ** 2).mean()
-                loss -= params["eta"] * torch.exp(-params["theta"] * torch.abs(mean_action - q_s_a)).mean()
+                loss += params["eta"] * torch.exp(-params["theta"] * torch.abs(mean_action - q_s_a)).mean()
 
             # Perform backpropagation and optimizer step
             loss.backward()

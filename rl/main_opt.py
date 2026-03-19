@@ -12,7 +12,7 @@ from agents.dqn.dqn_agent_ensemble import DQNAgentEnsemble
 from agents.sac.sac_agent_ensemble import SACAgentEnsemble
 
 
-@hydra.main(version_base=None, config_path="agents/sac", config_name="config")
+@hydra.main(version_base=None, config_path="agents/dqn/config_files", config_name="opt_config_theta")
 def main(config: DictConfig):
     wandb_log = True
 

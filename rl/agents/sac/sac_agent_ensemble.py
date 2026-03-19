@@ -41,8 +41,6 @@ class SACAgentEnsemble:
         self.bootstrapping = bootstrapping
         self.diversification = diversification
 
-        self.policy_network = PolicyNetwork(**self.model_params, device=self.device)
-
         if with_prior:
             self.q_value_networks = [
                 SequenceModelWithPrior(**self.model_params, device=self.device)
@@ -59,6 +57,11 @@ class SACAgentEnsemble:
             ]
             self.q_value_target_networks = [
                 CriticNetwork(**self.model_params, device=self.device)
+                for _ in range(self.ensemble_size)
+            ]
+            
+            self.policy_networks = [
+                PolicyNetwork(**self.model_params, device=self.device)
                 for _ in range(self.ensemble_size)
             ]
 
@@ -84,8 +87,11 @@ class SACAgentEnsemble:
             optim.Adam(q_net.parameters(), lr=params["lr"])
             for q_net in self.q_value_networks
         ]
+        self.policy_opts = [
+            optim.Adam(policy_net.parameters(), lr=params["lr"])
+            for policy_net in self.policy_networks
+        ]
 
-        self.policy_opt = optim.Adam(self.policy_network.parameters(), lr=params["lr"])
         self.alpha_opt = optim.Adam([self.log_alpha], lr=params["lr"])
 
         all_episode_stats = collections.defaultdict(list)
@@ -169,9 +175,6 @@ class SACAgentEnsemble:
             masks = masks.to(self.device)
 
         # Select a single Q-value network randomly for both target calculation and update
-        selected_index = random.randint(0, len(self.q_value_networks) - 1)
-        q_target_net = self.q_value_networks[selected_index]
-        optimizer = self.q_value_optimizers[selected_index]
         q_losses = []
 
         if self.diversification:
@@ -192,7 +195,7 @@ class SACAgentEnsemble:
 
             # Calculate the Q-Value target using only the selected Q-network
             with torch.no_grad():
-                _, next_probs = self.policy_network(next_states)
+                _, next_probs = self.policy_networks[idx](next_states)
                 next_log_probs = torch.log(next_probs)
                 next_q = q_target_net(next_states)
 
@@ -203,7 +206,6 @@ class SACAgentEnsemble:
                 )
                 target_q = rewards + params["gamma"] * (1 - done_masks) * next_v
 
-            # Update the selected Q-value network
             q_value = q_net(states).gather(1, actions.unsqueeze(1))
             if self.bootstrapping:
                 current_mask = masks[:, idx]
@@ -212,8 +214,8 @@ class SACAgentEnsemble:
                 q_loss = F.mse_loss(q_value, target_q)
 
             if self.diversification:
-                q_loss -= params["eta"] * torch.exp(-params["theta"] * torch.abs(mean_action - q_value)).mean()
-                
+                q_loss += params["eta"] * torch.exp(-params["theta"] * torch.abs(mean_action - q_value)).mean()
+
             optimizer.zero_grad()
             q_loss.backward()
             optimizer.step()
@@ -223,29 +225,30 @@ class SACAgentEnsemble:
         avg_q_loss = sum(q_losses) / len(q_losses)
 
         # Calculating the Policy target
-        _, probs = self.policy_network(states)
-        log_probs = torch.log(probs)
-        with torch.no_grad():
-            q_values_stack = torch.stack([q(states) for q in self.q_value_networks])
+        for idx in range(self.ensemble_size):
+            _, probs = self.policy_networks[idx](states)
+            log_probs = torch.log(probs)
+            with torch.no_grad():
+                q_values_stack = torch.stack([q(states) for q in self.q_value_networks])
 
-            match self.integration_type:
-                case "min":
-                    final_q_estimate, _ = torch.min(q_values_stack, dim=0)
-                case "var":
-                    mean_qs = torch.mean(q_values_stack, dim=0)
-                    std_qs = torch.std(q_values_stack, dim=0)
+                match self.integration_type:
+                    case "min":
+                        final_q_estimate, _ = torch.min(q_values_stack, dim=0)
+                    case "var":
+                        mean_qs = torch.mean(q_values_stack, dim=0)
+                        std_qs = torch.std(q_values_stack, dim=0)
 
-                    final_q_estimate = mean_qs - params["beta"] * std_qs
+                        final_q_estimate = mean_qs - params["beta"] * std_qs
 
-        policy_loss = (
-            (probs * (self.alpha.detach() * log_probs - final_q_estimate))
-            .sum(-1)
-            .mean()
-        )
+            policy_loss = (
+                (probs * (self.alpha.detach() * log_probs - final_q_estimate))
+                .sum(-1)
+                .mean()
+            )
 
-        self.policy_opt.zero_grad()
-        policy_loss.backward()
-        self.policy_opt.step()
+            self.policy_opts[idx].zero_grad()
+            policy_loss.backward()
+            self.policy_opts[idx].step()
 
         log_probs = (probs * log_probs).sum(-1)
         alpha_loss = -(
@@ -290,7 +293,7 @@ class SACAgentEnsemble:
         """Logs and evaluates the model's performance at regular intervals."""
         # Sample sequences for evaluation
         state_batch = sample_sequences_sac(
-            self.policy_network,
+            self.policy_networks,
             batch_size=100,
             start_token=params["num_actions"],
             seq_len=params["seq_len"],
