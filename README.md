@@ -91,10 +91,3 @@ To add a new method:
 3. Register the agent in `main.py`
 
 ---
-
-## Notes
-
-* Designed for research and experimentation rather than production use
-* Minimal structure for flexibility and rapid prototyping
-
----
